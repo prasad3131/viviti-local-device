@@ -112,4 +112,12 @@ router.delete('/files', (req, res) => {
   res.json({ deleted });
 });
 
+router.delete('/folders', (req, res) => {
+  const dir = safeDirPath(req.body.path || '');
+  if (dir === config.photoDir) return res.status(400).json({ error: 'Cannot delete root folder' });
+  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Folder not found' });
+  fs.rmSync(dir, { recursive: true, force: true });
+  res.json({ ok: true });
+});
+
 module.exports = router;
