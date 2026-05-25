@@ -84,6 +84,21 @@ router.post('/upload', upload.array('photos', 50), (req, res) => {
   res.json({ uploaded: req.files.map(f => ({ name: f.filename, size: f.size })) });
 });
 
+router.post('/copy', (req, res) => {
+  const { from_path, from_name, to_path } = req.body;
+  const name = path.basename(String(from_name || ''));
+  const fromFile = path.join(safeDirPath(from_path || ''), name);
+  const toDir = safeDirPath(to_path || '');
+  const toFile = path.join(toDir, `${Date.now()}-${name}`);
+  if (!fromFile.startsWith(config.photoDir) || !fs.existsSync(fromFile))
+    return res.status(404).json({ error: 'Source not found' });
+  if (!toFile.startsWith(config.photoDir))
+    return res.status(400).json({ error: 'Invalid destination' });
+  fs.mkdirSync(toDir, { recursive: true });
+  fs.copyFileSync(fromFile, toFile);
+  res.json({ ok: true });
+});
+
 router.delete('/files', (req, res) => {
   const { names } = req.body;
   const dir = safeDirPath(req.body.path || '');
