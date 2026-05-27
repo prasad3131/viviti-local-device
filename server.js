@@ -5,12 +5,21 @@ const path = require('path');
 const config = require('./config');
 const photosRouter = require('./routes/photos');
 const usersRouter = require('./routes/users');
+const { router: aiRouter, triggerBatch } = require('./routes/ai');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+// Track last activity — trigger AI batch after 5 min idle
+let lastActivity = Date.now();
+app.use((_req, _res, next) => { lastActivity = Date.now(); next(); });
+setInterval(() => {
+  if (Date.now() - lastActivity > 5 * 60_000) triggerBatch();
+}, 60_000);
+
 app.use('/photos', photosRouter);
 app.use('/users', usersRouter);
+app.use('/ai', aiRouter);
 
 app.get('/status', (_req, res) => {
   const stat = fs.statfsSync(config.photoDir);
