@@ -103,4 +103,48 @@ router.get('/duplicates', (req, res) => {
   res.json({ photos: rows });
 });
 
+// GET /ai/tags?path=folder  — tags + counts for photos in folder
+router.get('/tags', (req, res) => {
+  const db = require('../db');
+  const prefix = req.query.path ? String(req.query.path) + '/' : '';
+  const rows = db.prepare(
+    `SELECT scene_tags FROM photo_ai WHERE scene_tags IS NOT NULL AND scene_tags != '[]' AND photo_path LIKE ?`
+  ).all(prefix + '%');
+
+  const counts = {};
+  for (const { scene_tags } of rows) {
+    try {
+      for (const tag of JSON.parse(scene_tags)) {
+        counts[tag] = (counts[tag] || 0) + 1;
+      }
+    } catch {}
+  }
+  const tags = Object.entries(counts)
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count);
+  res.json({ tags });
+});
+
+// GET /ai/tagged?tag=beach&path=folder  — photos with a specific tag
+router.get('/tagged', (req, res) => {
+  const db = require('../db');
+  const tag    = String(req.query.tag || '');
+  const prefix = req.query.path ? String(req.query.path) + '/' : '';
+  if (!tag) return res.status(400).json({ error: 'tag required' });
+
+  const rows = db.prepare(
+    `SELECT photo_path FROM photo_ai WHERE scene_tags LIKE ? AND photo_path LIKE ?`
+  ).all(`%"${tag}"%`, prefix + '%');
+
+  const photos = rows.map(({ photo_path }) => {
+    const lastSlash = photo_path.lastIndexOf('/');
+    return {
+      photo_path,
+      folder: lastSlash >= 0 ? photo_path.slice(0, lastSlash) : '',
+      name:   lastSlash >= 0 ? photo_path.slice(lastSlash + 1) : photo_path,
+    };
+  });
+  res.json({ photos });
+});
+
 module.exports = { router, triggerBatch };

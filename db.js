@@ -16,8 +16,15 @@ db.exec(`
     phash        TEXT,
     is_duplicate INTEGER DEFAULT 0,
     duplicate_of TEXT,
+    scene_tags   TEXT,
+    objects      TEXT,
     ai_score     REAL
   )
 `);
+
+// Add columns when upgrading from older schema
+for (const col of ['scene_tags TEXT', 'objects TEXT']) {
+  try { db.exec(`ALTER TABLE photo_ai ADD COLUMN ${col}`); } catch {}
+}
 
 module.exports = db;
