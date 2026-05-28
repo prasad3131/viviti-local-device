@@ -5,11 +5,11 @@ Usage: python3 scene.py <image_path>
        python3 scene.py --download    (download model + labels only)
 Requires: pip3 install tflite-runtime
 """
-import sys, json, zipfile, urllib.request
+import sys, json, tarfile, urllib.request
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).parent / 'models'
-MODEL_URL   = 'https://storage.googleapis.com/download.tensorflow.org/models/tflite/mobilenet_v2_1.0_224_quant.zip'
+MODEL_URL   = 'https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/mobilenet_v2_1.0_224_quant.tgz'
 MODEL_FILE  = 'mobilenet_v2_1.0_224_quant.tflite'
 LABELS_URL  = 'https://storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt'
 LABELS_FILE = 'imagenet_labels.txt'
@@ -43,11 +43,15 @@ def ensure_assets():
 
     if not model_path.exists():
         print('[scene] Downloading MobileNet V2 (~4 MB)...', file=sys.stderr)
-        zip_path = MODELS_DIR / 'model.zip'
-        urllib.request.urlretrieve(MODEL_URL, str(zip_path))
-        with zipfile.ZipFile(str(zip_path)) as z:
-            z.extract(MODEL_FILE, str(MODELS_DIR))
-        zip_path.unlink()
+        archive_path = MODELS_DIR / 'model.tgz'
+        urllib.request.urlretrieve(MODEL_URL, str(archive_path))
+        with tarfile.open(str(archive_path)) as t:
+            for member in t.getmembers():
+                if member.name.endswith('.tflite'):
+                    member.name = MODEL_FILE
+                    t.extract(member, str(MODELS_DIR))
+                    break
+        archive_path.unlink()
 
     if not labels_path.exists():
         print('[scene] Downloading labels...', file=sys.stderr)
