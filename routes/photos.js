@@ -2,7 +2,11 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const config = require('../config');
+
+const THUMB_SCRIPT = path.join(__dirname, '..', 'ai', 'thumb.py');
+const THUMB_DIR    = path.join(config.dataDir, 'thumbs');
 
 const router = express.Router();
 
@@ -57,6 +61,34 @@ router.get('/', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/thumb', (req, res) => {
+  const dir  = safeDirPath(req.query.path || '');
+  const name = path.basename(String(req.query.name || ''));
+  const fp   = path.join(dir, name);
+  const size = Math.min(400, Math.max(50, parseInt(req.query.size) || 200));
+
+  if (!fp.startsWith(config.photoDir) || !fs.existsSync(fp)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  const key      = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
+  const thumbPath = path.join(THUMB_DIR, `${key}_${size}.jpg`);
+
+  const serve = (f) => {
+    res.setHeader('Cache-Control', 'public, max-age=604800');
+    res.sendFile(f);
+  };
+
+  if (fs.existsSync(thumbPath)) return serve(thumbPath);
+
+  fs.mkdirSync(THUMB_DIR, { recursive: true });
+  const py = spawn('python3', [THUMB_SCRIPT, fp, thumbPath, String(size)]);
+  py.on('close', code => {
+    if (code === 0 && fs.existsSync(thumbPath)) return serve(thumbPath);
+    serve(fp); // fallback to full image on error
+  });
 });
 
 router.get('/file', (req, res) => {
