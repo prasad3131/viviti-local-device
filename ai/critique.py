@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Viviti Photo Critique — on-demand quality analysis.
+Viviti Photo Critique — structured 7-point analysis.
 Usage: python3 critique.py <absolute_image_path>
 Output: JSON to stdout
 Requires: pip install opencv-python
@@ -17,87 +17,178 @@ def analyse(path):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
-    issues = []
 
-    # ── Blur / focus ─────────────────────────────────────────────────────────
-    lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    if lap < 40:
-        issues.append({'type': 'blur', 'sev': 'high',
-                       'msg': 'Subject is out of focus — try manual focus or a faster shutter'})
-    elif lap < 100:
-        issues.append({'type': 'blur', 'sev': 'medium',
-                       'msg': 'Slight blur detected — try a faster shutter speed'})
-
-    # ── Exposure — underexposed ───────────────────────────────────────────────
+    # ── Raw measurements ──────────────────────────────────────────────────────
+    lap         = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     mean_bright = float(gray.mean())
+    clipped     = float((gray > 248).mean() * 100)
+    noise       = _noise_sigma(gray)
+    b_mean      = float(img[:, :, 0].mean())
+    g_mean      = float(img[:, :, 1].mean())
+    r_mean      = float(img[:, :, 2].mean())
+
+    # ── Orientation & aspect ratio ────────────────────────────────────────────
+    orientation = 'landscape' if w > h else ('portrait' if h > w else 'square')
+    gcd = math.gcd(w, h)
+    aspect_ratio = f'{w // gcd}:{h // gcd}'
+
+    # ── Interpretation — mood ─────────────────────────────────────────────────
+    warm_bias = r_mean - b_mean
+    if warm_bias > 20:
+        mood = 'warm'
+        mood_desc = ('This photo has warm tones — oranges, reds, and yellows dominate. '
+                     'It may evoke feelings of energy, comfort, or nostalgia.')
+    elif warm_bias < -20:
+        mood = 'cool'
+        mood_desc = ('This photo has cool tones — blues and greens dominate. '
+                     'It may evoke feelings of calm, distance, or melancholy.')
+    else:
+        mood = 'neutral'
+        mood_desc = ('This photo has a neutral, balanced colour tone. '
+                     'It reads as natural and unbiased.')
+
+    if mean_bright > 170:
+        mood_desc += ' The high-key lighting feels open and airy.'
+    elif mean_bright < 80:
+        mood_desc += ' The low-key lighting adds drama and mood.'
+
+    # ── Interpretation — composition feel ─────────────────────────────────────
+    edges   = cv2.Canny(gray, 50, 150)
+    tot     = float(edges.sum()) or 1.0
+    mid_h   = edges[h // 3: 2 * h // 3, :].sum() / tot
+    mid_v   = edges[:, w // 3: 2 * w // 3].sum() / tot
+    centred = mid_h > 0.55 and mid_v > 0.55
+
+    if centred:
+        composition_feel = 'The subject appears centred, giving a formal, symmetrical feel.'
+    else:
+        composition_feel = 'The subject placement creates an asymmetric, dynamic feel.'
+
+    # ── Technical issues ──────────────────────────────────────────────────────
+    technical = []
+
+    if lap < 40:
+        technical.append({'sev': 'high',
+                          'msg': 'Subject is out of focus — try manual focus or a faster shutter speed'})
+    elif lap < 100:
+        technical.append({'sev': 'medium',
+                          'msg': 'Slight blur detected — try a faster shutter speed to freeze motion'})
+
     if mean_bright < 45:
-        issues.append({'type': 'underexposed', 'sev': 'high',
-                       'msg': 'Image is very underexposed — raise ISO or use a longer exposure'})
+        technical.append({'sev': 'high',
+                          'msg': 'Very underexposed — raise ISO or use a longer exposure'})
     elif mean_bright < 75:
-        issues.append({'type': 'underexposed', 'sev': 'medium',
-                       'msg': 'Image appears dark — try +1 stop exposure compensation'})
+        technical.append({'sev': 'medium',
+                          'msg': 'Image appears dark — try +1 stop exposure compensation'})
 
-    # ── Exposure — overexposed ────────────────────────────────────────────────
-    clipped = float((gray > 248).mean() * 100)
     if clipped > 5:
-        issues.append({'type': 'overexposed', 'sev': 'high',
-                       'msg': f'Highlights blown out ({clipped:.0f}% clipped) — reduce exposure'})
+        technical.append({'sev': 'high',
+                          'msg': f'Highlights blown out ({clipped:.0f}% clipped) — reduce exposure by 1–2 stops'})
     elif clipped > 1:
-        issues.append({'type': 'overexposed', 'sev': 'medium',
-                       'msg': 'Some highlight clipping — reduce exposure slightly'})
+        technical.append({'sev': 'medium',
+                          'msg': 'Some highlight clipping — reduce exposure slightly'})
 
-    # ── Noise ─────────────────────────────────────────────────────────────────
-    noise = _noise_sigma(gray)
     if noise > 20:
-        issues.append({'type': 'noise', 'sev': 'high',
-                       'msg': 'Heavy noise / grain — shoot at a lower ISO or in better light'})
+        technical.append({'sev': 'high',
+                          'msg': 'Heavy noise / grain — shoot at a lower ISO or in better light'})
     elif noise > 10:
-        issues.append({'type': 'noise', 'sev': 'medium',
-                       'msg': 'Moderate noise visible — try lowering ISO'})
+        technical.append({'sev': 'medium',
+                          'msg': 'Moderate noise visible — try lowering ISO'})
 
-    # ── Horizon tilt (landscape photos only) ─────────────────────────────────
     if w > h * 1.1:
         tilt = _horizon_tilt(gray)
         if tilt is not None and abs(tilt) > 1.5:
             side = 'right' if tilt > 0 else 'left'
-            issues.append({'type': 'tilt', 'sev': 'medium',
-                           'msg': f'Horizon tilted {abs(tilt):.1f}° to the {side} — straighten the camera'})
+            technical.append({'sev': 'medium',
+                              'msg': f'Horizon tilted {abs(tilt):.1f}° to the {side} — straighten in editing'})
 
-    # ── White balance ─────────────────────────────────────────────────────────
-    b = float(img[:, :, 0].mean())
-    g = float(img[:, :, 1].mean())
-    r = float(img[:, :, 2].mean())
-    if r > g * 1.25 and r > b * 1.3:
-        issues.append({'type': 'whitebalance', 'sev': 'low',
-                       'msg': 'Warm colour cast (orange / yellow) — adjust white balance'})
-    elif b > g * 1.25 and b > r * 1.3:
-        issues.append({'type': 'whitebalance', 'sev': 'low',
-                       'msg': 'Cool colour cast (blue) — adjust white balance'})
+    if r_mean > g_mean * 1.25 and r_mean > b_mean * 1.3:
+        technical.append({'sev': 'low',
+                          'msg': 'Warm colour cast (orange/yellow) — try a cooler white balance setting'})
+    elif b_mean > g_mean * 1.25 and b_mean > r_mean * 1.3:
+        technical.append({'sev': 'low',
+                          'msg': 'Cool colour cast (blue) — try a warmer white balance setting'})
 
-    # ── Composition ───────────────────────────────────────────────────────────
-    edges = cv2.Canny(gray, 50, 150)
-    tot = float(edges.sum()) or 1.0
-    mid_h = edges[h // 3: 2 * h // 3, :].sum() / tot
-    mid_v = edges[:, w // 3: 2 * w // 3].sum() / tot
-    if mid_h > 0.55 and mid_v > 0.55:
-        issues.append({'type': 'composition', 'sev': 'low',
-                       'msg': 'Subject appears centred — try placing it on a rule-of-thirds intersection'})
+    # ── Artistic issues ───────────────────────────────────────────────────────
+    artistic = []
+
+    if centred:
+        artistic.append({'sev': 'low',
+                         'msg': 'Subject is centred — try placing it on a rule-of-thirds intersection for more energy'})
+
+    if w > h * 2.2:
+        artistic.append({'sev': 'low',
+                         'msg': 'Very wide aspect ratio — consider whether a panoramic crop serves the subject'})
+
+    # Colour variety
+    hsv  = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    sat  = float(hsv[:, :, 1].mean())
+    if sat < 30:
+        artistic.append({'sev': 'low',
+                         'msg': 'Very low colour saturation — consider a black & white conversion for more impact'})
+
+    # ── Good points ───────────────────────────────────────────────────────────
+    good_points = []
+
+    if lap >= 200:
+        good_points.append('Excellent sharpness — the subject is crisp and well-focused')
+    elif lap >= 100:
+        good_points.append('Acceptable sharpness — focus is generally good')
+
+    if 75 <= mean_bright <= 185 and clipped < 1:
+        good_points.append('Well-balanced exposure — good detail in highlights and shadows')
+
+    if noise < 5:
+        good_points.append('Very clean image — low noise, likely shot at a low ISO')
+    elif noise < 10:
+        good_points.append('Good noise levels — image is clean')
+
+    if not centred:
+        good_points.append('Effective composition — the off-centre placement adds visual interest')
+
+    if sat >= 60:
+        good_points.append('Strong, vibrant colours that draw the eye')
+
+    if not good_points:
+        good_points.append('The photo captures its subject clearly')
+
+    # ── Improvements ─────────────────────────────────────────────────────────
+    improvements = [i for i in technical + artistic if i['sev'] in ('high', 'medium')]
 
     # ── Score ─────────────────────────────────────────────────────────────────
     deductions = {'high': 25, 'medium': 12, 'low': 4}
-    score = 100 - sum(deductions.get(i['sev'], 0) for i in issues)
+    all_issues = technical + artistic
+    score = 100 - sum(deductions.get(i['sev'], 0) for i in all_issues)
     score = max(0, min(100, score))
 
-    if not issues:
-        issues.append({'type': 'ok', 'sev': 'none',
-                       'msg': 'Great shot — no major issues detected'})
+    # ── Overall summary ───────────────────────────────────────────────────────
+    if score >= 85:
+        overall = 'Outstanding shot — excellent technical quality across the board.'
+    elif score >= 70:
+        overall = 'Good photo — solid technique with a few areas worth refining.'
+    elif score >= 55:
+        overall = 'Decent shot with some technical issues that could be addressed in editing or future shots.'
+    elif score >= 40:
+        overall = 'The photo has potential but several technical issues are holding it back.'
+    else:
+        overall = 'Significant issues detected — use this feedback to strengthen your next shot.'
 
     return {
-        'score': score,
-        'blur_score': round(lap, 1),
-        'brightness': round(mean_bright, 1),
-        'noise': round(float(noise), 1),
-        'issues': issues,
+        'score':        score,
+        'blur_score':   round(lap, 1),
+        'brightness':   round(mean_bright, 1),
+        'noise':        round(float(noise), 1),
+        'orientation':  orientation,
+        'aspect_ratio': aspect_ratio,
+        'mood':         mood,
+        'mood_desc':    mood_desc,
+        'composition_feel': composition_feel,
+        'technical':    technical,
+        'artistic':     artistic,
+        'good_points':  good_points,
+        'improvements': improvements,
+        'overall':      overall,
+        'issues':       all_issues,
     }
 
 
