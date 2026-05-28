@@ -7,7 +7,9 @@ const config = require('../config');
 
 const CRITIQUE_SCRIPT = path.join(__dirname, '..', 'ai', 'critique.py');
 const BATCH_SCRIPT    = path.join(__dirname, '..', 'ai', 'batch.py');
+const FACES_SCRIPT    = path.join(__dirname, '..', 'ai', 'faces.py');
 const DB_PATH         = path.join(config.dataDir, 'viviti.db');
+const FACE_THUMB_DIR  = path.join(config.dataDir, 'face_thumbs');
 
 function safePath(userPath, name) {
   const parts = String(userPath || '').split('/').map(p => path.basename(p)).filter(Boolean);
@@ -145,6 +147,60 @@ router.get('/tagged', (req, res) => {
     };
   });
   res.json({ photos });
+});
+
+// ── Face recognition ─────────────────────────────────────────────────────────
+
+// POST /ai/faces/run — trigger face batch
+let facesRunning = false;
+router.post('/faces/run', (_req, res) => {
+  res.json({ ok: true, already_running: facesRunning });
+  if (facesRunning) return;
+  facesRunning = true;
+  console.log('[AI] Face batch started');
+  runPython(FACES_SCRIPT, [config.photoDir, DB_PATH], 30 * 60_000)
+    .then(r  => console.log('[AI] Face batch done:', r))
+    .catch(e => console.error('[AI] Face batch error:', e.message))
+    .finally(() => { facesRunning = false; });
+});
+
+// GET /ai/faces — list all face clusters
+router.get('/faces', (_req, res) => {
+  const db = require('../db');
+  const rows = db.prepare(
+    'SELECT id, name, sample_thumb, photo_count FROM face_clusters ORDER BY photo_count DESC'
+  ).all();
+  res.json({ faces: rows });
+});
+
+// PUT /ai/faces/:id — set name for a cluster
+router.put('/faces/:id', (req, res) => {
+  const db = require('../db');
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  db.prepare('UPDATE face_clusters SET name = ? WHERE id = ?').run(name, req.params.id);
+  res.json({ ok: true });
+});
+
+// GET /ai/faces/:id/photos — photos containing this person
+router.get('/faces/:id/photos', (req, res) => {
+  const db = require('../db');
+  const rows = db.prepare(
+    'SELECT DISTINCT photo_path FROM photo_faces WHERE cluster_id = ? ORDER BY photo_path'
+  ).all(req.params.id);
+  const photos = rows.map(({ photo_path }) => {
+    const i = photo_path.lastIndexOf('/');
+    return { photo_path, folder: i >= 0 ? photo_path.slice(0, i) : '', name: i >= 0 ? photo_path.slice(i + 1) : photo_path };
+  });
+  res.json({ photos });
+});
+
+// GET /ai/faces/thumb/:filename — serve face thumbnail
+router.get('/faces/thumb/:filename', (req, res) => {
+  const fp = path.join(FACE_THUMB_DIR, path.basename(req.params.filename));
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
+  res.setHeader('Cache-Control', 'public, max-age=604800');
+  res.sendFile(fp);
 });
 
 module.exports = { router, triggerBatch };
