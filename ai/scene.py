@@ -30,7 +30,9 @@ TAG_KEYWORDS = {
                   'ambulance', 'minivan', 'sports car'],
     'birthday':  ['birthday cake', 'candle'],
     'indoor':    ['bedroom', 'library', 'bathroom', 'kitchen', 'bookcase', 'sofa',
-                  'television', 'laptop', 'monitor', 'keyboard', 'wardrobe'],
+                  'television', 'laptop', 'monitor', 'keyboard', 'wardrobe',
+                  'screen', 'modem', 'printer', 'radio', 'desk', 'mouse', 'remote control',
+                  'desktop computer', 'hard disc', 'oscilloscope', 'projector'],
     'outdoor':   ['park bench', 'fountain', 'garden', 'picket fence', 'stone wall'],
     'people':    ['person', 'man', 'woman', 'child', 'crowd', 'suit', 'jersey', 'face'],
 }
