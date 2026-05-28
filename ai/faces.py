@@ -12,8 +12,21 @@ from pathlib import Path
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
 SIMILARITY_THRESHOLD = 0.14
 
-_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-FACE_CASCADE = cv2.CascadeClassifier(_cascade_path)
+def _find_cascade():
+    candidates = [
+        '/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
+        '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
+        '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
+        '/usr/local/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
+    ]
+    if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+        candidates.insert(0, cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError('haarcascade_frontalface_default.xml not found')
+
+FACE_CASCADE = cv2.CascadeClassifier(_find_cascade())
 
 
 def face_histogram(face_bgr):
