@@ -2,6 +2,7 @@ const express = require('express');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const dgram = require('dgram');
 const config = require('./config');
 const photosRouter = require('./routes/photos');
 const usersRouter = require('./routes/users');
@@ -33,7 +34,7 @@ app.get('/status', (_req, res) => {
   });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req, res) => res.json({ ok: true, viviti: true }));
 
 // ── APK download ─────────────────────────────────────────────────────────────
 const APK_PATH = path.join(__dirname, 'public', 'viviti.apk');
@@ -142,4 +143,17 @@ app.listen(config.port, () => {
   console.log(`Viviti local server running on port ${config.port}`);
   console.log(`Photo dir: ${config.photoDir}`);
   console.log(`Access at: http://${getLocalIp()}:${config.port}`);
+});
+
+// ── UDP discovery ─────────────────────────────────────────────────────────────
+// Phones broadcast "viviti-discover" on UDP 55356; we reply with our IP+port.
+const udpServer = dgram.createSocket('udp4');
+udpServer.on('message', (msg, rinfo) => {
+  if (msg.toString().trim() !== 'viviti-discover') return;
+  const reply = Buffer.from(JSON.stringify({ viviti: true, ip: getLocalIp(), port: config.port }));
+  udpServer.send(reply, rinfo.port, rinfo.address);
+});
+udpServer.bind(55356, () => {
+  udpServer.setBroadcast(true);
+  console.log('UDP discovery listening on port 55356');
 });
