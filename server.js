@@ -2,6 +2,7 @@ const express = require('express');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const dgram = require('dgram');
 const config = require('./config');
 const photosRouter = require('./routes/photos');
@@ -173,3 +174,30 @@ udpServer.bind(55356, () => {
   udpServer.setBroadcast(true);
   console.log('UDP discovery listening on port 55356');
 });
+
+// ── Cloud heartbeat ───────────────────────────────────────────────────────────
+// POSTs storage stats to vivitionline.com every 30s so the cloud can alert
+// the owner if the device goes offline or storage runs low.
+function sendHeartbeat() {
+  let total_bytes = 0, available_bytes = 0;
+  try {
+    const stat = fs.statfsSync(config.photoDir);
+    total_bytes = stat.bsize * stat.blocks;
+    available_bytes = stat.bsize * stat.bavail;
+  } catch {}
+
+  const body = JSON.stringify({ token: DEVICE_KEY, total_bytes, available_bytes });
+  const req = https.request({
+    hostname: 'vivitionline.com',
+    path: '/api/heartbeat',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    timeout: 8000,
+  });
+  req.on('error', () => {}); // silent — device may be offline
+  req.on('timeout', () => req.destroy());
+  req.write(body);
+  req.end();
+}
+
+setInterval(sendHeartbeat, 30_000);
