@@ -217,4 +217,99 @@ router.get('/faces/thumb/:filename', (req, res) => {
   res.sendFile(fp);
 });
 
+// ── Auto-Albums ───────────────────────────────────────────────────────────────
+
+const IMAGE_RE_ALBUMS = /\.(jpg|jpeg|png|gif|heic|raw|cr2|arw|nef|dng)$/i;
+
+function walkDir(dir, cb) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) walkDir(full, cb);
+    else if (IMAGE_RE_ALBUMS.test(e.name)) cb(full, e.name);
+  }
+}
+
+// GET /ai/albums — list all months that have photos
+router.get('/albums', (req, res) => {
+  const albums = {};
+  try {
+    walkDir(config.photoDir, (full, name) => {
+      const stat = fs.statSync(full);
+      const d = new Date(stat.mtime);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const rel = path.relative(config.photoDir, full).replace(/\\/g, '/');
+      if (!albums[key]) albums[key] = { key, cover: rel, count: 0 };
+      albums[key].count++;
+    });
+  } catch {}
+  const list = Object.values(albums).sort((a, b) => b.key.localeCompare(a.key));
+  res.json({ albums: list });
+});
+
+// GET /ai/albums/:key/photos — photos in a specific month (key = "YYYY-MM")
+router.get('/albums/:key/photos', (req, res) => {
+  const key = String(req.params.key);
+  if (!/^\d{4}-\d{2}$/.test(key)) return res.status(400).json({ error: 'invalid key' });
+  const [year, month] = key.split('-').map(Number);
+  const photos = [];
+  try {
+    walkDir(config.photoDir, (full) => {
+      const stat = fs.statSync(full);
+      const d = new Date(stat.mtime);
+      if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return;
+      const rel = path.relative(config.photoDir, full).replace(/\\/g, '/');
+      const i = rel.lastIndexOf('/');
+      photos.push({
+        photo_path: rel,
+        folder: i >= 0 ? rel.slice(0, i) : '',
+        name: i >= 0 ? rel.slice(i + 1) : rel,
+        mtime: stat.mtime,
+      });
+    });
+  } catch {}
+  photos.sort((a, b) => new Date(b.mtime) - new Date(a.mtime));
+  res.json({ photos });
+});
+
+// ── Smart Highlights ──────────────────────────────────────────────────────────
+
+// GET /ai/highlights — best photo from each burst window (60s)
+router.get('/highlights', (req, res) => {
+  const db = require('../db');
+  let rows;
+  try {
+    rows = db.prepare(
+      'SELECT photo_path, blur_score FROM photo_ai WHERE is_blurry = 0 AND is_duplicate = 0 ORDER BY photo_path'
+    ).all();
+  } catch {
+    return res.json({ highlights: [] });
+  }
+
+  const BURST_MS = 60 * 1000;
+  const withTimes = rows.map(r => {
+    try {
+      const abs = path.join(config.photoDir, r.photo_path.replace(/\//g, path.sep));
+      const stat = fs.statSync(abs);
+      return { photo_path: r.photo_path, blur_score: r.blur_score, mtime: stat.mtimeMs };
+    } catch { return null; }
+  }).filter(Boolean).sort((a, b) => a.mtime - b.mtime);
+
+  const highlights = [];
+  let i = 0;
+  while (i < withTimes.length) {
+    let j = i + 1;
+    while (j < withTimes.length && withTimes[j].mtime - withTimes[i].mtime <= BURST_MS) j++;
+    const group = withTimes.slice(i, j);
+    const best = group.reduce((a, b) => b.blur_score > a.blur_score ? b : a);
+    highlights.push(best.photo_path);
+    i = j;
+  }
+
+  const result = highlights.map(p => {
+    const idx = p.lastIndexOf('/');
+    return { photo_path: p, folder: idx >= 0 ? p.slice(0, idx) : '', name: idx >= 0 ? p.slice(idx + 1) : p };
+  });
+  res.json({ highlights: result });
+});
+
 module.exports = { router, triggerBatch };

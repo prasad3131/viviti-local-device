@@ -6,11 +6,29 @@ const { spawn } = require('child_process');
 const config = require('../config');
 
 const THUMB_SCRIPT = path.join(__dirname, '..', 'ai', 'thumb.py');
+const EXIF_SCRIPT  = path.join(__dirname, '..', 'ai', 'exif.py');
 const THUMB_DIR    = path.join(config.dataDir, 'thumbs');
 
 const router = express.Router();
 
 const IMAGE_RE = /\.(jpg|jpeg|png|gif|heic|raw|cr2|arw|nef|dng)$/i;
+const VIDEO_RE = /\.(mp4|mov|avi|mkv|m4v|3gp)$/i;
+const MEDIA_RE = /\.(jpg|jpeg|png|gif|heic|raw|cr2|arw|nef|dng|mp4|mov|avi|mkv|m4v|3gp)$/i;
+
+function runPython(scriptPath, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const py = spawn('python3', [scriptPath, ...args]);
+    let out = '', err = '';
+    const timer = setTimeout(() => { py.kill(); reject(new Error('Python timeout')); }, timeoutMs);
+    py.stdout.on('data', d => { out += d; });
+    py.stderr.on('data', d => { err += d; });
+    py.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(err.trim() || `exited ${code}`));
+      try { resolve(JSON.parse(out)); } catch { reject(new Error('Invalid output')); }
+    });
+  });
+}
 
 function safeDirPath(userPath) {
   if (!userPath) return config.photoDir;
@@ -51,10 +69,10 @@ router.get('/', (req, res) => {
     const dir = safeDirPath(req.query.path || '');
     fs.mkdirSync(dir, { recursive: true });
     const all = fs.readdirSync(dir)
-      .filter(f => IMAGE_RE.test(f))
+      .filter(f => MEDIA_RE.test(f))
       .map(f => {
         const stat = fs.statSync(path.join(dir, f));
-        return { name: f, size: stat.size, modified: stat.mtime };
+        return { name: f, size: stat.size, modified: stat.mtime, isVideo: VIDEO_RE.test(f) };
       })
       .sort((a, b) => new Date(b.modified) - new Date(a.modified));
     res.json({ photos: all.slice(offset, offset + limit), total: all.length });
@@ -72,6 +90,9 @@ router.get('/thumb', (req, res) => {
   if (!fp.startsWith(config.photoDir) || !fs.existsSync(fp)) {
     return res.status(404).json({ error: 'Not found' });
   }
+
+  // Videos don't have thumbnails — let the app show a placeholder
+  if (VIDEO_RE.test(name)) return res.status(415).json({ error: 'No thumb for video' });
 
   const key      = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
   const thumbPath = path.join(THUMB_DIR, `${key}_${size}.jpg`);
@@ -98,6 +119,22 @@ router.get('/file', (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   res.sendFile(fp);
+});
+
+// GET /photos/exif?path=X&name=Y
+router.get('/exif', async (req, res) => {
+  const dir = safeDirPath(req.query.path || '');
+  const name = path.basename(String(req.query.name || ''));
+  const fp = path.join(dir, name);
+  if (!fp.startsWith(config.photoDir) || !fs.existsSync(fp) || !IMAGE_RE.test(name)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const result = await runPython(EXIF_SCRIPT, [fp], 10_000);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 const upload = multer({
