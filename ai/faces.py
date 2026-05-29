@@ -105,13 +105,18 @@ def detect_faces_in(img_path, thumb_dir):
     return results
 
 
-def assign_cluster(conn, histogram):
+def assign_cluster(conn, histogram, exclude=None):
+    """Assign histogram to best matching cluster, skipping any in `exclude` set."""
+    if exclude is None:
+        exclude = set()
     arr = np.array(histogram)
     rows = conn.execute(
         'SELECT id, centroid FROM face_clusters WHERE centroid IS NOT NULL'
     ).fetchall()
     best_id, best_dist = None, float('inf')
     for cid, cent_json in rows:
+        if cid in exclude:
+            continue
         d = cosine_dist(arr, np.array(json.loads(cent_json)))
         if d < best_dist:
             best_dist, best_id = d, cid
@@ -141,7 +146,11 @@ def run_faces(photo_dir, db_path):
     conn = sqlite3.connect(db_path)
     init_db(conn)
 
-    done = {r[0] for r in conn.execute('SELECT DISTINCT photo_path FROM photo_faces')}
+    # Skip only specific (photo, x, y) tuples already processed — not whole photos
+    done_faces = set(
+        (r[0], r[1], r[2])
+        for r in conn.execute('SELECT photo_path, x, y FROM photo_faces')
+    )
     counts = {'processed': 0, 'faces': 0}
 
     for root, _, files in os.walk(photo_dir):
@@ -150,10 +159,17 @@ def run_faces(photo_dir, db_path):
                 continue
             abs_path = os.path.join(root, f)
             rel_path = os.path.relpath(abs_path, photo_dir).replace('\\', '/')
-            if rel_path in done:
+            face_list = detect_faces_in(abs_path, thumb_dir)
+            if not face_list:
+                counts['processed'] += 1
                 continue
-            for face in detect_faces_in(abs_path, thumb_dir):
-                cid = assign_cluster(conn, face['histogram'])
+            # Each face in the same photo must go to a different cluster
+            used_this_photo = set()
+            for face in face_list:
+                if (rel_path, face['x'], face['y']) in done_faces:
+                    continue
+                cid = assign_cluster(conn, face['histogram'], exclude=used_this_photo)
+                used_this_photo.add(cid)
                 existing_thumb = conn.execute(
                     'SELECT sample_thumb FROM face_clusters WHERE id=?', (cid,)
                 ).fetchone()
