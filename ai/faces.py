@@ -14,6 +14,7 @@ SIMILARITY_THRESHOLD = 0.14
 
 def _find_cascade():
     candidates = [
+        str(Path(__file__).parent / 'models' / 'haarcascade_frontalface_default.xml'),
         '/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
         '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
         '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
