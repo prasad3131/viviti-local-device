@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const dgram = require('dgram');
+const { execSync, execFile } = require('child_process');
 const config = require('./config');
 const photosRouter = require('./routes/photos');
 const usersRouter = require('./routes/users');
@@ -178,6 +179,15 @@ udpServer.bind(55356, () => {
 // ── Cloud heartbeat ───────────────────────────────────────────────────────────
 // POSTs storage stats to vivitionline.com every 30s so the cloud can alert
 // the owner if the device goes offline or storage runs low.
+let _gitSha = null;
+function getGitSha() {
+  if (!_gitSha) {
+    try { _gitSha = execSync('git rev-parse --short HEAD', { cwd: __dirname, timeout: 2000 }).toString().trim(); }
+    catch { _gitSha = 'unknown'; }
+  }
+  return _gitSha;
+}
+
 function sendHeartbeat() {
   let total_bytes = 0, available_bytes = 0;
   try {
@@ -186,7 +196,7 @@ function sendHeartbeat() {
     available_bytes = stat.bsize * stat.bavail;
   } catch {}
 
-  const body = JSON.stringify({ token: DEVICE_KEY, total_bytes, available_bytes });
+  const body = JSON.stringify({ token: DEVICE_KEY, total_bytes, available_bytes, git_sha: getGitSha() });
   const req = https.request({
     hostname: 'vivitionline.com',
     path: '/api/heartbeat',
@@ -201,3 +211,38 @@ function sendHeartbeat() {
 }
 
 setInterval(sendHeartbeat, 30_000);
+
+// ── OTA version check ─────────────────────────────────────────────────────────
+// Polls vivitionline.com/api/firmware/latest every 4 hours.
+// When cloud SHA differs from running SHA, the update script handles git pull + restart.
+function checkForUpdate() {
+  const req = https.request({
+    hostname: 'vivitionline.com',
+    path: '/api/firmware/latest',
+    method: 'GET',
+    timeout: 8000,
+  });
+  req.on('error', () => {});
+  req.on('timeout', () => req.destroy());
+  req.on('response', res => {
+    let data = '';
+    res.on('data', chunk => { data += chunk; });
+    res.on('end', () => {
+      try {
+        const { sha } = JSON.parse(data);
+        if (sha && sha !== getGitSha()) {
+          console.log(`OTA update available: ${getGitSha()} -> ${sha}`);
+          execFile(
+            '/opt/viviti/viviti-update.sh', [],
+            { timeout: 120_000 },
+            (err) => { if (err) console.error('OTA update failed:', err.message); },
+          );
+        }
+      } catch {}
+    });
+  });
+  req.end();
+}
+
+// First check 5 min after boot (allows stable startup), then every 4h
+setTimeout(() => { checkForUpdate(); setInterval(checkForUpdate, 4 * 60 * 60_000); }, 5 * 60_000);

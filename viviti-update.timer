@@ -1,0 +1,10 @@
+[Unit]
+Description=Viviti OTA update timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=4h
+Unit=viviti-update.service
+
+[Install]
+WantedBy=timers.target

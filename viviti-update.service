@@ -1,0 +1,9 @@
+[Unit]
+Description=Viviti OTA update
+After=network-online.target viviti.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/viviti/viviti-update.sh
+StandardOutput=journal
+StandardError=journal
