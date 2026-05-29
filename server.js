@@ -8,6 +8,7 @@ const photosRouter = require('./routes/photos');
 const usersRouter = require('./routes/users');
 const { router: aiRouter, triggerBatch } = require('./routes/ai');
 const { router: systemRouter, readMode } = require('./routes/system');
+const { DEVICE_KEY, requireKey } = require('./routes/auth');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -19,31 +20,30 @@ setInterval(() => {
   if (Date.now() - lastActivity > 5 * 60_000) triggerBatch();
 }, 60_000);
 
-app.use('/photos', photosRouter);
-app.use('/users', usersRouter);
-app.use('/ai', aiRouter);
-app.use('/system', systemRouter);
+// ── Protected routes (require device key) ────────────────────────────────────
+app.use('/photos', requireKey, photosRouter);
+app.use('/ai', requireKey, aiRouter);
 
-app.get('/status', (_req, res) => {
+app.get('/status', requireKey, (_req, res) => {
   const stat = fs.statfsSync(config.photoDir);
   const total_bytes = stat.bsize * stat.blocks;
   const available_bytes = stat.bsize * stat.bavail;
-  res.json({
-    name: 'Viviti Local',
-    total_bytes,
-    available_bytes,
-    uptime: process.uptime(),
-  });
+  res.json({ name: 'Viviti Local', total_bytes, available_bytes, uptime: process.uptime() });
 });
+
+// ── Public routes ─────────────────────────────────────────────────────────────
+// /users/register is public — it only creates a folder, exposes no data
+app.use('/users', usersRouter);
+// WiFi setup must work before auth is established on a fresh device
+app.use('/system', systemRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true, viviti: true, mode: readMode() }));
 
-// ── APK download ─────────────────────────────────────────────────────────────
+// ── APK download ──────────────────────────────────────────────────────────────
 const APK_PATH = path.join(__dirname, 'public', 'viviti.apk');
-
 app.get('/app/download', (_req, res) => {
   if (!fs.existsSync(APK_PATH)) {
-    return res.status(404).send('APK not yet available. Build with EAS and place at public/viviti.apk');
+    return res.status(404).send('APK not yet available.');
   }
   res.download(APK_PATH, 'viviti.apk');
 });
@@ -60,7 +60,11 @@ app.get('/', (_req, res) => {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #fefcfe; padding: 40px 24px; max-width: 400px; margin: 0 auto; }
     h1 { font-size: 34px; font-weight: 800; color: #257af0; margin-bottom: 4px; }
-    .sub { color: #6b6070; font-size: 15px; margin-bottom: 36px; }
+    .sub { color: #6b6070; font-size: 15px; margin-bottom: 28px; }
+    .key-card { background: #f0f7ff; border: 2px solid #257af0; border-radius: 12px; padding: 16px 20px; margin-bottom: 28px; }
+    .key-label { font-size: 12px; font-weight: 600; color: #257af0; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .key-value { font-size: 28px; font-weight: 800; color: #1a1118; letter-spacing: 4px; font-family: monospace; }
+    .key-hint { font-size: 12px; color: #6b6070; margin-top: 6px; }
     label { font-size: 13px; font-weight: 600; color: #1a1118; display: block; margin-bottom: 6px; }
     input { width: 100%; border: 1.5px solid #e0dbe2; border-radius: 10px; padding: 14px 12px; font-size: 16px; margin-bottom: 8px; background: #fff; outline: none; -webkit-appearance: none; }
     input:focus { border-color: #257af0; }
@@ -74,7 +78,7 @@ app.get('/', (_req, res) => {
     #done .desc { color: #6b6070; font-size: 15px; margin-bottom: 28px; }
     .dl-btn { display: block; background: #1a1118; color: #fff; border-radius: 10px; padding: 16px; font-size: 16px; font-weight: 700; text-decoration: none; text-align: center; margin-bottom: 16px; }
     .ios { font-size: 13px; color: #9e96a4; line-height: 1.6; margin-bottom: 24px; }
-    .tip { font-size: 13px; color: #6b6070; background: #f5f3f7; border-radius: 10px; padding: 14px 16px; line-height: 1.6; }
+    .tip { font-size: 13px; color: #6b6070; background: #f5f3f7; border-radius: 10px; padding: 14px 16px; line-height: 1.8; }
     .tip strong { color: #1a1118; }
   </style>
 </head>
@@ -82,12 +86,20 @@ app.get('/', (_req, res) => {
   <div id="setup">
     <h1>Viviti</h1>
     <p class="sub">Your personal photo storage</p>
+
+    <div class="key-card">
+      <div class="key-label">Device Code</div>
+      <div class="key-value">${DEVICE_KEY}</div>
+      <div class="key-hint">You will need this code when connecting the app.</div>
+    </div>
+
     <label for="nameInput">Your name</label>
     <input id="nameInput" type="text" placeholder="e.g. Prasad" autocomplete="off" autocorrect="off">
     <p class="hint">A folder with your name will be created on this device.</p>
     <div class="err" id="err"></div>
-    <button id="btn" onclick="go()">Create Profile &amp; Download</button>
+    <button id="btn" onclick="go()">Create Profile &amp; Download App</button>
   </div>
+
   <div id="done">
     <h1>Viviti</h1><br>
     <h2>Welcome, <span class="name" id="doneName"></span>!</h2>
@@ -95,10 +107,12 @@ app.get('/', (_req, res) => {
     <a class="dl-btn" href="/app/download">⬇&nbsp; Download App (Android)</a>
     <p class="ios">iPhone? Search <strong>Viviti Local</strong> on the App Store.</p>
     <div class="tip">
-      When setting up the app, enter your name exactly as:<br>
-      <strong id="nameHint"></strong>
+      In the app, enter:<br>
+      Name: <strong id="nameHint"></strong><br>
+      Device Code: <strong>${DEVICE_KEY}</strong>
     </div>
   </div>
+
   <script>
     async function go() {
       const name = document.getElementById('nameInput').value.trim();
@@ -143,12 +157,12 @@ function getLocalIp() {
 app.listen(config.port, () => {
   fs.mkdirSync(config.photoDir, { recursive: true });
   console.log(`Viviti local server running on port ${config.port}`);
-  console.log(`Photo dir: ${config.photoDir}`);
-  console.log(`Access at: http://${getLocalIp()}:${config.port}`);
+  console.log(`Device key: ${DEVICE_KEY}`);
+  console.log(`Photo dir:  ${config.photoDir}`);
+  console.log(`Access at:  http://${getLocalIp()}:${config.port}`);
 });
 
 // ── UDP discovery ─────────────────────────────────────────────────────────────
-// Phones broadcast "viviti-discover" on UDP 55356; we reply with our IP+port.
 const udpServer = dgram.createSocket('udp4');
 udpServer.on('message', (msg, rinfo) => {
   if (msg.toString().trim() !== 'viviti-discover') return;
