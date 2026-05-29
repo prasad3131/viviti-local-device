@@ -1,0 +1,12 @@
+[Unit]
+Description=Viviti WiFi Check (start AP hotspot if no client connection)
+After=NetworkManager.service
+Before=viviti.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/viviti/wifi-check.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

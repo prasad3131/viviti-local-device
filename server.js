@@ -7,6 +7,7 @@ const config = require('./config');
 const photosRouter = require('./routes/photos');
 const usersRouter = require('./routes/users');
 const { router: aiRouter, triggerBatch } = require('./routes/ai');
+const { router: systemRouter, readMode } = require('./routes/system');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -21,6 +22,7 @@ setInterval(() => {
 app.use('/photos', photosRouter);
 app.use('/users', usersRouter);
 app.use('/ai', aiRouter);
+app.use('/system', systemRouter);
 
 app.get('/status', (_req, res) => {
   const stat = fs.statfsSync(config.photoDir);
@@ -34,7 +36,7 @@ app.get('/status', (_req, res) => {
   });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, viviti: true }));
+app.get('/health', (_req, res) => res.json({ ok: true, viviti: true, mode: readMode() }));
 
 // ── APK download ─────────────────────────────────────────────────────────────
 const APK_PATH = path.join(__dirname, 'public', 'viviti.apk');
