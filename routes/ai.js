@@ -5,9 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config');
 
-const CRITIQUE_SCRIPT = path.join(__dirname, '..', 'ai', 'critique.py');
-const BATCH_SCRIPT    = path.join(__dirname, '..', 'ai', 'batch.py');
-const FACES_SCRIPT    = path.join(__dirname, '..', 'ai', 'faces.py');
+const CRITIQUE_SCRIPT      = path.join(__dirname, '..', 'ai', 'critique.py');
+const BATCH_SCRIPT         = path.join(__dirname, '..', 'ai', 'batch.py');
+const FACES_SCRIPT         = path.join(__dirname, '..', 'ai', 'faces.py');
+const DETECT_PHOTO_SCRIPT  = path.join(__dirname, '..', 'ai', 'detect_photo.py');
 const DB_PATH         = path.join(config.dataDir, 'viviti.db');
 const FACE_THUMB_DIR  = path.join(config.dataDir, 'face_thumbs');
 
@@ -150,6 +151,19 @@ router.get('/tagged', (req, res) => {
 });
 
 // ── Face recognition ─────────────────────────────────────────────────────────
+
+// POST /ai/faces/detect-photo { path, name } — detect faces in one photo on-demand
+router.post('/faces/detect-photo', async (req, res) => {
+  const fp = safePath(req.body.path, req.body.name);
+  if (!fp) return res.status(400).json({ error: 'Invalid path' });
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Photo not found' });
+  try {
+    const result = await runPython(DETECT_PHOTO_SCRIPT, [fp, DB_PATH, config.photoDir], 30_000);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // POST /ai/faces/run — trigger face batch
 let facesRunning = false;
