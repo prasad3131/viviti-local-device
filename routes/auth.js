@@ -20,7 +20,8 @@ const DEVICE_KEY = getOrCreateKey();
 
 // Middleware: validates X-Viviti-Key header on protected routes
 function requireKey(req, res, next) {
-  const provided = (req.headers['x-viviti-key'] || '').toUpperCase();
+  // Accept key via header (API calls) or query param (image/media URLs)
+  const provided = (req.headers['x-viviti-key'] || req.query.key || '').toUpperCase();
   if (provided !== DEVICE_KEY) {
     return res.status(401).json({ error: 'Invalid or missing device key' });
   }
