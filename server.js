@@ -39,7 +39,7 @@ app.use('/users', usersRouter);
 // WiFi setup must work before auth is established on a fresh device
 app.use('/system', systemRouter);
 
-app.get('/health', (_req, res) => res.json({ ok: true, viviti: true, mode: readMode() }));
+app.get('/health', (_req, res) => res.json({ ok: true, viviti: true, mode: readMode(), key: DEVICE_KEY }));
 
 // ── APK download ──────────────────────────────────────────────────────────────
 const APK_PATH = path.join(__dirname, 'public', 'viviti.apk');
