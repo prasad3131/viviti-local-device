@@ -86,12 +86,17 @@ def detect_faces_in(img_path, thumb_dir):
         return []
     ih, iw = img.shape[:2]
 
-    # DNN expects 300x300 blob
-    blob = cv2.dnn.blobFromImage(
-        cv2.resize(img, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0)
-    )
+    # Pre-scale large images so faces occupy a meaningful fraction of the 300x300 DNN input.
+    # A 4K image squashed directly to 300x300 makes faces only ~15px — undetectable.
+    # Scaling to max 960px long edge keeps faces well above the minimum size.
+    MAX_DIM = 960
+    scale = min(1.0, MAX_DIM / max(ih, iw))
+    work = cv2.resize(img, (int(iw * scale), int(ih * scale))) if scale < 1.0 else img
+    wh, ww = work.shape[:2]
+
+    blob = cv2.dnn.blobFromImage(work, 1.0, (300, 300), (104.0, 177.0, 123.0))
     NET.setInput(blob)
-    detections = NET.forward()  # shape: (1, 1, N, 7)
+    detections = NET.forward()
 
     results = []
     for i in range(detections.shape[2]):
@@ -99,9 +104,9 @@ def detect_faces_in(img_path, thumb_dir):
         if confidence < CONFIDENCE_THRESHOLD:
             continue
 
-        # Bounding box in absolute pixels
-        box = detections[0, 0, i, 3:7] * np.array([iw, ih, iw, ih])
-        x1, y1, x2, y2 = box.astype(int)
+        # Bounding box in work-image coordinates, then map back to original
+        box = detections[0, 0, i, 3:7] * np.array([ww, wh, ww, wh])
+        x1, y1, x2, y2 = (box / scale).astype(int)
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(iw, x2), min(ih, y2)
         fw, fh = x2 - x1, y2 - y1
