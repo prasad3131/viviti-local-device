@@ -13,7 +13,7 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-CONFIDENCE_THRESHOLD = 0.55   # Ignore detections below 55% confidence
+CONFIDENCE_THRESHOLD = 0.35   # Ignore detections below 35% confidence
 MIN_FACE_PX = 30              # Ignore faces smaller than 30px (noise)
 SIMILARITY_THRESHOLD = 0.14   # Cosine distance threshold for clustering
 

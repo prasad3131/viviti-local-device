@@ -17,7 +17,7 @@ fi
 if [ ! -f "$MODEL" ]; then
   echo "Downloading face detection model (~10 MB)..."
   wget -q --show-progress -O "$MODEL" \
-    "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20180205_fp16/res10_300x300_ssd_iter_140000_fp16.caffemodel"
+    "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
 fi
 
 echo "Models ready in $DIR"
