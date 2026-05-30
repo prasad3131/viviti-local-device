@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Viviti Face Detection — Haar cascade + histogram clustering.
-No additional installs required (uses opencv-python).
+Viviti Face Detection — OpenCV DNN ResNet-SSD detector + histogram clustering.
+Much more accurate than Haar cascade: handles angled faces, partial occlusion,
+varied lighting, and rejects non-face false positives via confidence threshold.
+
+Run setup_models.sh first to download the model files (~10 MB).
 Usage: python3 faces.py <photo_dir> <db_path>
 """
 import sys, os, json, sqlite3, hashlib
@@ -10,24 +13,28 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-SIMILARITY_THRESHOLD = 0.14
+CONFIDENCE_THRESHOLD = 0.55   # Ignore detections below 55% confidence
+MIN_FACE_PX = 30              # Ignore faces smaller than 30px (noise)
+SIMILARITY_THRESHOLD = 0.14   # Cosine distance threshold for clustering
 
-def _find_cascade():
-    candidates = [
-        str(Path(__file__).parent / 'models' / 'haarcascade_frontalface_default.xml'),
-        '/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
-        '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
-        '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
-        '/usr/local/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
-    ]
-    if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
-        candidates.insert(0, cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    raise FileNotFoundError('haarcascade_frontalface_default.xml not found')
+MODEL_DIR = Path(__file__).parent / 'models'
+PROTO_PATH = MODEL_DIR / 'deploy.prototxt'
+MODEL_PATH = MODEL_DIR / 'res10_300x300_ssd.caffemodel'
 
-FACE_CASCADE = cv2.CascadeClassifier(_find_cascade())
+
+def _load_net():
+    if not PROTO_PATH.exists() or not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f'DNN model files missing. Run: bash /opt/viviti/ai/setup_models.sh'
+        )
+    net = cv2.dnn.readNetFromCaffe(str(PROTO_PATH), str(MODEL_PATH))
+    # Use CPU — Orange Pi has no CUDA
+    net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+    net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    return net
+
+
+NET = _load_net()
 
 
 def face_histogram(face_bgr):
@@ -78,35 +85,46 @@ def detect_faces_in(img_path, thumb_dir):
     if img is None:
         return []
     ih, iw = img.shape[:2]
-    scale = min(1.0, 800 / max(ih, iw))
-    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY),
-                       (int(iw * scale), int(ih * scale)))
-    rects = FACE_CASCADE.detectMultiScale(
-        small, scaleFactor=1.1, minNeighbors=5, minSize=(28, 28)
+
+    # DNN expects 300x300 blob
+    blob = cv2.dnn.blobFromImage(
+        cv2.resize(img, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0)
     )
+    NET.setInput(blob)
+    detections = NET.forward()  # shape: (1, 1, N, 7)
+
     results = []
-    if not len(rects):
-        return results
-    for (x, y, fw, fh) in rects:
-        ox, oy = int(x / scale), int(y / scale)
-        ow, oh = int(fw / scale), int(fh / scale)
-        pad = int(oh * 0.18)
-        x1, y1 = max(0, ox - pad), max(0, oy - pad)
-        x2, y2 = min(iw, ox + ow + pad), min(ih, oy + oh + pad)
+    for i in range(detections.shape[2]):
+        confidence = float(detections[0, 0, i, 2])
+        if confidence < CONFIDENCE_THRESHOLD:
+            continue
+
+        # Bounding box in absolute pixels
+        box = detections[0, 0, i, 3:7] * np.array([iw, ih, iw, ih])
+        x1, y1, x2, y2 = box.astype(int)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(iw, x2), min(ih, y2)
+        fw, fh = x2 - x1, y2 - y1
+
+        if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
+            continue
+
         crop = img[y1:y2, x1:x2]
         if crop.size == 0:
             continue
+
         hist = face_histogram(crop)
-        key = hashlib.md5(f'{img_path}{ox}{oy}'.encode()).hexdigest()[:10]
+        key = hashlib.md5(f'{img_path}{x1}{y1}'.encode()).hexdigest()[:10]
         thumb_path = os.path.join(thumb_dir, f'face_{key}.jpg')
         cv2.imwrite(thumb_path, cv2.resize(crop, (120, 120)))
-        results.append({'x': ox, 'y': oy, 'w': ow, 'h': oh,
-                        'histogram': hist, 'thumb_path': thumb_path})
+        results.append({
+            'x': x1, 'y': y1, 'w': fw, 'h': fh,
+            'histogram': hist, 'thumb_path': thumb_path,
+        })
     return results
 
 
 def assign_cluster(conn, histogram, exclude=None):
-    """Assign histogram to best matching cluster, skipping any in `exclude` set."""
     if exclude is None:
         exclude = set()
     arr = np.array(histogram)
@@ -146,7 +164,6 @@ def run_faces(photo_dir, db_path):
     conn = sqlite3.connect(db_path)
     init_db(conn)
 
-    # Skip only specific (photo, x, y) tuples already processed — not whole photos
     done_faces = set(
         (r[0], r[1], r[2])
         for r in conn.execute('SELECT photo_path, x, y FROM photo_faces')
@@ -163,7 +180,6 @@ def run_faces(photo_dir, db_path):
             if not face_list:
                 counts['processed'] += 1
                 continue
-            # Each face in the same photo must go to a different cluster
             used_this_photo = set()
             for face in face_list:
                 if (rel_path, face['x'], face['y']) in done_faces:
