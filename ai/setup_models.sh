@@ -1,23 +1,17 @@
 #!/bin/bash
-# Download OpenCV DNN face detection model files (~10 MB total)
+# Download YuNet face detection model (~234 KB)
+# Requires OpenCV 4.5+ (cv2.FaceDetectorYN) — Orange Pi has 4.10.0
 # Run once on the Pi: bash /opt/viviti/ai/setup_models.sh
 set -e
 DIR="$(dirname "$0")/models"
 mkdir -p "$DIR"
 
-PROTO="$DIR/deploy.prototxt"
-MODEL="$DIR/res10_300x300_ssd.caffemodel"
-
-if [ ! -f "$PROTO" ]; then
-  echo "Downloading deploy.prototxt..."
-  wget -q -O "$PROTO" \
-    "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
-fi
+MODEL="$DIR/face_detection_yunet_2023mar.onnx"
 
 if [ ! -f "$MODEL" ]; then
-  echo "Downloading face detection model (~10 MB)..."
+  echo "Downloading YuNet face detection model (~234 KB)..."
   wget -q --show-progress -O "$MODEL" \
-    "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 fi
 
-echo "Models ready in $DIR"
+echo "YuNet model ready: $MODEL"

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Viviti Face Detection — OpenCV DNN ResNet-SSD detector + histogram clustering.
-Much more accurate than Haar cascade: handles angled faces, partial occlusion,
-varied lighting, and rejects non-face false positives via confidence threshold.
+Viviti Face Detection — YuNet (cv2.FaceDetectorYN) + histogram clustering.
+YuNet handles non-frontal, partially occluded, and downward-looking faces —
+ideal for casual party/family photos. Requires OpenCV 4.5+ (Pi has 4.10.0).
 
-Run setup_models.sh first to download the model files (~10 MB).
+Run setup_models.sh first to download the model (~234 KB).
 Usage: python3 faces.py <photo_dir> <db_path>
 """
 import sys, os, json, sqlite3, hashlib
@@ -13,28 +13,30 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-CONFIDENCE_THRESHOLD = 0.35   # Ignore detections below 35% confidence
-MIN_FACE_PX = 30              # Ignore faces smaller than 30px (noise)
-SIMILARITY_THRESHOLD = 0.14   # Cosine distance threshold for clustering
+SCORE_THRESHOLD  = 0.5    # YuNet confidence threshold
+NMS_THRESHOLD    = 0.3    # Non-maximum suppression
+MIN_FACE_PX      = 30     # Ignore faces smaller than 30px
+SIMILARITY_THRESHOLD = 0.14
 
-MODEL_DIR = Path(__file__).parent / 'models'
-PROTO_PATH = MODEL_DIR / 'deploy.prototxt'
-MODEL_PATH = MODEL_DIR / 'res10_300x300_ssd.caffemodel'
+MODEL_DIR  = Path(__file__).parent / 'models'
+MODEL_PATH = MODEL_DIR / 'face_detection_yunet_2023mar.onnx'
+MAX_DIM    = 1280         # Pre-scale long edge to this before detection
 
 
-def _load_net():
-    if not PROTO_PATH.exists() or not MODEL_PATH.exists():
+def _load_detector():
+    if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            f'DNN model files missing. Run: bash /opt/viviti/ai/setup_models.sh'
+            f'YuNet model missing. Run: bash /opt/viviti/ai/setup_models.sh'
         )
-    net = cv2.dnn.readNetFromCaffe(str(PROTO_PATH), str(MODEL_PATH))
-    # Use CPU — Orange Pi has no CUDA
-    net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-    net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-    return net
+    return cv2.FaceDetectorYN.create(
+        str(MODEL_PATH), "", (320, 320),
+        score_threshold=SCORE_THRESHOLD,
+        nms_threshold=NMS_THRESHOLD,
+        top_k=5000,
+    )
 
 
-NET = _load_net()
+DETECTOR = _load_detector()
 
 
 def face_histogram(face_bgr):
@@ -86,29 +88,29 @@ def detect_faces_in(img_path, thumb_dir):
         return []
     ih, iw = img.shape[:2]
 
-    # Pre-scale large images so faces occupy a meaningful fraction of the 300x300 DNN input.
-    # A 4K image squashed directly to 300x300 makes faces only ~15px — undetectable.
-    # Scaling to max 960px long edge keeps faces well above the minimum size.
-    MAX_DIM = 960
+    # Scale large images so faces are a meaningful fraction of the input.
     scale = min(1.0, MAX_DIM / max(ih, iw))
     work = cv2.resize(img, (int(iw * scale), int(ih * scale))) if scale < 1.0 else img
     wh, ww = work.shape[:2]
 
-    blob = cv2.dnn.blobFromImage(work, 1.0, (300, 300), (104.0, 177.0, 123.0))
-    NET.setInput(blob)
-    detections = NET.forward()
+    DETECTOR.setInputSize((ww, wh))
+    _, faces = DETECTOR.detect(work)
+
+    if faces is None:
+        return []
 
     results = []
-    for i in range(detections.shape[2]):
-        confidence = float(detections[0, 0, i, 2])
-        if confidence < CONFIDENCE_THRESHOLD:
-            continue
+    for face in faces:
+        # YuNet returns: x, y, w, h, [5 landmark pairs], score
+        x, y, w, h = face[:4].astype(int)
 
-        # Bounding box in work-image coordinates, then map back to original
-        box = detections[0, 0, i, 3:7] * np.array([ww, wh, ww, wh])
-        x1, y1, x2, y2 = (box / scale).astype(int)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(iw, x2), min(ih, y2)
+        # Map back to original image coordinates
+        x1 = max(0, int(x / scale))
+        y1 = max(0, int(y / scale))
+        fw = int(w / scale)
+        fh = int(h / scale)
+        x2 = min(iw, x1 + fw)
+        y2 = min(ih, y1 + fh)
         fw, fh = x2 - x1, y2 - y1
 
         if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
