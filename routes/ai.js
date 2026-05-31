@@ -174,8 +174,16 @@ router.post('/faces/detect-photo', async (req, res) => {
   } catch { existing = []; }
 
   if (existing.length > 0) {
+    // Deduplicate by cluster_id — consolidate_clusters can merge two clusters
+    // that both appeared in this photo, producing duplicate cluster_id rows.
+    const seen = new Set();
+    const deduped = existing.filter(r => {
+      if (seen.has(r.cluster_id)) return false;
+      seen.add(r.cluster_id);
+      return true;
+    });
     return res.json({
-      faces: existing.map(r => ({
+      faces: deduped.map(r => ({
         x: r.x, y: r.y, w: r.w, h: r.h,
         cluster_id: r.cluster_id,
         cluster_name: r.cluster_name,
