@@ -157,6 +157,34 @@ router.post('/faces/detect-photo', async (req, res) => {
   const fp = safePath(req.body.path, req.body.name);
   if (!fp) return res.status(400).json({ error: 'Invalid path' });
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Photo not found' });
+
+  const db = require('../db');
+  const relPath = path.relative(config.photoDir, fp).replace(/\\/g, '/');
+
+  // Use batch-scan results if already in the DB — those ran through the full quality filters
+  let existing;
+  try {
+    existing = db.prepare(`
+      SELECT pf.x, pf.y, pf.w, pf.h, pf.thumb_path, pf.cluster_id,
+             fc.name AS cluster_name
+      FROM photo_faces pf
+      LEFT JOIN face_clusters fc ON fc.id = pf.cluster_id
+      WHERE pf.photo_path = ?
+    `).all(relPath);
+  } catch { existing = []; }
+
+  if (existing.length > 0) {
+    return res.json({
+      faces: existing.map(r => ({
+        x: r.x, y: r.y, w: r.w, h: r.h,
+        cluster_id: r.cluster_id,
+        cluster_name: r.cluster_name,
+        thumb_filename: r.thumb_path ? path.basename(r.thumb_path) : null,
+      })),
+    });
+  }
+
+  // Photo not yet scanned — run fresh detection and store results
   try {
     const result = await runPython(DETECT_PHOTO_SCRIPT, [fp, DB_PATH, config.photoDir], 30_000);
     res.json(result);
