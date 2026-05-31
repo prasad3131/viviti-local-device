@@ -55,6 +55,14 @@ def cosine_dist(a, b):
     return 1.0 - float(np.dot(a, b))
 
 
+def has_skin_tone(face_bgr, min_ratio=0.12):
+    """Reject non-face crops (letters, objects, patterns) that have no skin-colored pixels.
+    Works across ethnicities by covering a broad HSV skin range."""
+    hsv = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (0, 15, 30), (30, 200, 255))
+    return (np.count_nonzero(mask) / mask.size) >= min_ratio
+
+
 def init_db(conn):
     conn.execute('''
         CREATE TABLE IF NOT EXISTS face_clusters (
@@ -131,6 +139,8 @@ def detect_faces_in(img_path, thumb_dir):
 
         crop = img[y1:y2, x1:x2]
         if crop.size == 0:
+            continue
+        if not has_skin_tone(crop):
             continue
 
         hist = face_histogram(crop)
