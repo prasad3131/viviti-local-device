@@ -13,7 +13,7 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-SCORE_THRESHOLD  = 0.5    # YuNet confidence threshold
+SCORE_THRESHOLD  = 0.1    # YuNet confidence threshold (low-angle/party photos score 0.1-0.2)
 NMS_THRESHOLD    = 0.3    # Non-maximum suppression
 MIN_FACE_PX      = 30     # Ignore faces smaller than 30px
 SIMILARITY_THRESHOLD = 0.14
