@@ -223,12 +223,21 @@ router.get('/faces', (_req, res) => {
   res.json({ faces: rows });
 });
 
-// PUT /ai/faces/:id — set name for a cluster
+// PUT /ai/faces/:id — set name (and optionally anchor the thumbnail) for a cluster
 router.put('/faces/:id', (req, res) => {
   const db = require('../db');
   const name = String(req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'name required' });
-  db.prepare('UPDATE face_clusters SET name = ? WHERE id = ?').run(name, req.params.id);
+  // When the user names a face from the photo viewer, pin sample_thumb to the
+  // thumbnail they were looking at so People screen matches their expectation.
+  const rawThumb = req.body.thumb_filename ? String(req.body.thumb_filename) : null;
+  const thumbPath = rawThumb ? path.join(FACE_THUMB_DIR, path.basename(rawThumb)) : null;
+  if (thumbPath) {
+    db.prepare('UPDATE face_clusters SET name = ?, sample_thumb = ? WHERE id = ?')
+      .run(name, thumbPath, req.params.id);
+  } else {
+    db.prepare('UPDATE face_clusters SET name = ? WHERE id = ?').run(name, req.params.id);
+  }
   res.json({ ok: true });
 });
 
