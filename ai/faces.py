@@ -13,9 +13,10 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-SCORE_THRESHOLD  = 0.1    # YuNet confidence threshold (low-angle/party photos score 0.1-0.2)
+SCORE_THRESHOLD  = 0.1    # YuNet confidence (downward-looking party faces score 0.1-0.2)
 NMS_THRESHOLD    = 0.3    # Non-maximum suppression
 MIN_FACE_PX      = 30     # Ignore faces smaller than 30px
+MAX_FACE_AR      = 1.1    # Skip detections wider than tall — real faces are always portrait
 SIMILARITY_THRESHOLD = 0.14
 
 MODEL_DIR  = Path(__file__).parent / 'models'
@@ -114,6 +115,8 @@ def detect_faces_in(img_path, thumb_dir):
         fw, fh = x2 - x1, y2 - y1
 
         if fw < MIN_FACE_PX or fh < MIN_FACE_PX:
+            continue
+        if fh > 0 and fw / fh > MAX_FACE_AR:
             continue
 
         crop = img[y1:y2, x1:x2]
