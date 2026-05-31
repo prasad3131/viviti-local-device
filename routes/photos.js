@@ -5,9 +5,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 const config = require('../config');
 
-const THUMB_SCRIPT = path.join(__dirname, '..', 'ai', 'thumb.py');
+let sharp;
+try { sharp = require('sharp'); } catch { sharp = null; }
+
 const EXIF_SCRIPT  = path.join(__dirname, '..', 'ai', 'exif.py');
 const THUMB_DIR    = path.join(config.dataDir, 'thumbs');
+
+// Coalesces concurrent requests for the same thumbnail path into one resize op
+const pendingThumbs = new Map();
 
 const router = express.Router();
 
@@ -64,7 +69,7 @@ router.post('/folders', (req, res) => {
 
 router.get('/', (req, res) => {
   const offset = Math.max(0, parseInt(req.query.offset) || 0);
-  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit) || 20));
   try {
     const dir = safeDirPath(req.query.path || '');
     fs.mkdirSync(dir, { recursive: true });
@@ -81,7 +86,7 @@ router.get('/', (req, res) => {
   }
 });
 
-router.get('/thumb', (req, res) => {
+router.get('/thumb', async (req, res) => {
   const dir  = safeDirPath(req.query.path || '');
   const name = path.basename(String(req.query.name || ''));
   const fp   = path.join(dir, name);
@@ -91,10 +96,9 @@ router.get('/thumb', (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
 
-  // Videos don't have thumbnails — let the app show a placeholder
   if (VIDEO_RE.test(name)) return res.status(415).json({ error: 'No thumb for video' });
 
-  const key      = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
+  const key       = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
   const thumbPath = path.join(THUMB_DIR, `${key}_${size}.jpg`);
 
   const serve = (f) => {
@@ -105,11 +109,32 @@ router.get('/thumb', (req, res) => {
   if (fs.existsSync(thumbPath)) return serve(thumbPath);
 
   fs.mkdirSync(THUMB_DIR, { recursive: true });
-  const py = spawn('python3', [THUMB_SCRIPT, fp, thumbPath, String(size)]);
-  py.on('close', code => {
-    if (code === 0 && fs.existsSync(thumbPath)) return serve(thumbPath);
-    serve(fp); // fallback to full image on error
-  });
+
+  if (sharp) {
+    // Sharp (Node.js native) — no subprocess, handles concurrent requests
+    if (!pendingThumbs.has(thumbPath)) {
+      const p = sharp(fp)
+        .rotate()                                                  // auto-orient via EXIF
+        .resize(size, size, { fit: 'cover', position: 'attention' })
+        .jpeg({ quality: 82, progressive: true })
+        .toFile(thumbPath)
+        .catch(() => null)
+        .finally(() => pendingThumbs.delete(thumbPath));
+      pendingThumbs.set(thumbPath, p);
+    }
+    try { await pendingThumbs.get(thumbPath); } catch {}
+  } else {
+    // Fallback: Python (slow — run npm install on device to get Sharp)
+    await new Promise(resolve => {
+      const py = spawn('python3', [
+        path.join(__dirname, '..', 'ai', 'thumb.py'), fp, thumbPath, String(size),
+      ]);
+      py.on('close', resolve);
+    });
+  }
+
+  if (fs.existsSync(thumbPath)) return serve(thumbPath);
+  serve(fp);
 });
 
 router.get('/file', (req, res) => {
