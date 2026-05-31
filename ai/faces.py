@@ -57,9 +57,13 @@ def cosine_dist(a, b):
 
 def has_skin_tone(face_bgr, min_ratio=0.12):
     """Reject non-face crops (letters, objects, patterns) that have no skin-colored pixels.
-    Works across ethnicities by covering a broad HSV skin range."""
+    H: 0-18 (OpenCV) = standard 0-36° — warm skin tones but NOT yellow (H≥20).
+    Also checks pinkish/reddish wrap-around (H: 170-180) for lighter skin."""
     hsv = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, (0, 15, 30), (30, 200, 255))
+    mask = cv2.bitwise_or(
+        cv2.inRange(hsv, (0,  20, 40), (18, 180, 240)),   # warm/brown skin
+        cv2.inRange(hsv, (170, 20, 40), (180, 180, 240)), # pink/reddish skin
+    )
     return (np.count_nonzero(mask) / mask.size) >= min_ratio
 
 
