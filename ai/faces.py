@@ -13,11 +13,12 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-SCORE_THRESHOLD  = 0.1    # YuNet confidence (downward-looking party faces score 0.1-0.2)
-NMS_THRESHOLD    = 0.3    # Non-maximum suppression
-MIN_FACE_PX      = 30     # Ignore faces smaller than 30px
-MAX_FACE_AR      = 1.1    # Skip detections wider than tall — real faces are always portrait
-SIMILARITY_THRESHOLD = 0.14
+SCORE_THRESHOLD       = 0.1    # YuNet confidence (downward-looking party faces score 0.1-0.2)
+NMS_THRESHOLD         = 0.3    # Non-maximum suppression
+MIN_FACE_PX           = 30     # Ignore faces smaller than 30px
+MAX_FACE_AR           = 1.1    # Skip detections wider than tall — real faces are portrait
+SIMILARITY_THRESHOLD  = 0.22   # Merge into existing cluster if cosine dist < this
+CONSOLIDATION_THRESHOLD = 0.18 # Merge two existing clusters if their centroids are this close
 
 MODEL_DIR  = Path(__file__).parent / 'models'
 MODEL_PATH = MODEL_DIR / 'face_detection_yunet_2023mar.onnx'
@@ -61,6 +62,7 @@ def init_db(conn):
             name        TEXT,
             centroid    TEXT,
             sample_thumb TEXT,
+            best_score  REAL DEFAULT 0,
             photo_count INTEGER DEFAULT 0,
             created_at  TEXT DEFAULT (datetime("now"))
         )
@@ -71,10 +73,20 @@ def init_db(conn):
             photo_path  TEXT NOT NULL,
             cluster_id  INTEGER REFERENCES face_clusters(id),
             histogram   TEXT NOT NULL,
+            score       REAL DEFAULT 0,
             x INTEGER, y INTEGER, w INTEGER, h INTEGER,
             thumb_path  TEXT
         )
     ''')
+    # Add new columns to existing tables (safe to run multiple times)
+    for sql in [
+        'ALTER TABLE face_clusters ADD COLUMN best_score REAL DEFAULT 0',
+        'ALTER TABLE photo_faces ADD COLUMN score REAL DEFAULT 0',
+    ]:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass
     try:
         conn.execute('CREATE INDEX IF NOT EXISTS idx_pf_cluster ON photo_faces(cluster_id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_pf_photo ON photo_faces(photo_path)')
@@ -89,7 +101,6 @@ def detect_faces_in(img_path, thumb_dir):
         return []
     ih, iw = img.shape[:2]
 
-    # Scale large images so faces are a meaningful fraction of the input.
     scale = min(1.0, MAX_DIM / max(ih, iw))
     work = cv2.resize(img, (int(iw * scale), int(ih * scale))) if scale < 1.0 else img
     wh, ww = work.shape[:2]
@@ -102,10 +113,9 @@ def detect_faces_in(img_path, thumb_dir):
 
     results = []
     for face in faces:
-        # YuNet returns: x, y, w, h, [5 landmark pairs], score
         x, y, w, h = face[:4].astype(int)
+        score = float(face[14])
 
-        # Map back to original image coordinates
         x1 = max(0, int(x / scale))
         y1 = max(0, int(y / scale))
         fw = int(w / scale)
@@ -129,7 +139,7 @@ def detect_faces_in(img_path, thumb_dir):
         cv2.imwrite(thumb_path, cv2.resize(crop, (120, 120)))
         results.append({
             'x': x1, 'y': y1, 'w': fw, 'h': fh,
-            'histogram': hist, 'thumb_path': thumb_path,
+            'histogram': hist, 'thumb_path': thumb_path, 'score': score,
         })
     return results
 
@@ -168,6 +178,47 @@ def assign_cluster(conn, histogram, exclude=None):
     return cur.lastrowid
 
 
+def consolidate_clusters(conn):
+    """Merge clusters whose centroids are within CONSOLIDATION_THRESHOLD.
+    Runs after all photos are processed to collapse duplicate clusters of the same person.
+    The cluster with more photos survives; named clusters take priority."""
+    rows = conn.execute(
+        'SELECT id, centroid, name, photo_count, sample_thumb, best_score '
+        'FROM face_clusters WHERE centroid IS NOT NULL ORDER BY photo_count DESC'
+    ).fetchall()
+    merged = set()
+
+    for i in range(len(rows)):
+        id1, c1, name1, count1, thumb1, score1 = rows[i]
+        if id1 in merged:
+            continue
+        arr1 = np.array(json.loads(c1))
+
+        for j in range(i + 1, len(rows)):
+            id2, c2, name2, count2, thumb2, score2 = rows[j]
+            if id2 in merged:
+                continue
+            d = cosine_dist(arr1, np.array(json.loads(c2)))
+            if d < CONSOLIDATION_THRESHOLD:
+                # Merge id2 into id1
+                conn.execute('UPDATE photo_faces SET cluster_id=? WHERE cluster_id=?', (id1, id2))
+                conn.execute('UPDATE face_clusters SET photo_count=photo_count+? WHERE id=?', (count2, id1))
+                # Adopt id2's name if id1 is unnamed
+                if name2 and not name1:
+                    conn.execute('UPDATE face_clusters SET name=? WHERE id=?', (name2, id1))
+                    name1 = name2
+                # Adopt id2's thumbnail if it has a better score
+                if (score2 or 0) > (score1 or 0):
+                    conn.execute('UPDATE face_clusters SET sample_thumb=?, best_score=? WHERE id=?',
+                                 (thumb2, score2, id1))
+                    score1, thumb1 = score2, thumb2
+                conn.execute('DELETE FROM face_clusters WHERE id=?', (id2,))
+                merged.add(id2)
+
+    if merged:
+        conn.commit()
+
+
 def run_faces(photo_dir, db_path):
     thumb_dir = os.path.join(os.path.dirname(db_path), 'face_thumbs')
     os.makedirs(thumb_dir, exist_ok=True)
@@ -196,18 +247,19 @@ def run_faces(photo_dir, db_path):
                     continue
                 cid = assign_cluster(conn, face['histogram'], exclude=used_this_photo)
                 used_this_photo.add(cid)
-                existing_thumb = conn.execute(
-                    'SELECT sample_thumb FROM face_clusters WHERE id=?', (cid,)
+                # Update sample_thumb if this face has a higher score (more frontal)
+                row = conn.execute(
+                    'SELECT sample_thumb, best_score FROM face_clusters WHERE id=?', (cid,)
                 ).fetchone()
-                if existing_thumb and not existing_thumb[0]:
+                if row and (not row[0] or face['score'] > (row[1] or 0)):
                     conn.execute(
-                        'UPDATE face_clusters SET sample_thumb=? WHERE id=?',
-                        (face['thumb_path'], cid)
+                        'UPDATE face_clusters SET sample_thumb=?, best_score=? WHERE id=?',
+                        (face['thumb_path'], face['score'], cid)
                     )
                 conn.execute(
-                    'INSERT INTO photo_faces (photo_path,cluster_id,histogram,x,y,w,h,thumb_path) '
-                    'VALUES (?,?,?,?,?,?,?,?)',
-                    (rel_path, cid, json.dumps(face['histogram']),
+                    'INSERT INTO photo_faces (photo_path,cluster_id,histogram,score,x,y,w,h,thumb_path) '
+                    'VALUES (?,?,?,?,?,?,?,?,?)',
+                    (rel_path, cid, json.dumps(face['histogram']), face['score'],
                      face['x'], face['y'], face['w'], face['h'], face['thumb_path'])
                 )
                 counts['faces'] += 1
@@ -216,6 +268,7 @@ def run_faces(photo_dir, db_path):
                 conn.commit()
 
     conn.commit()
+    consolidate_clusters(conn)
     conn.close()
     print(json.dumps(counts))
 
