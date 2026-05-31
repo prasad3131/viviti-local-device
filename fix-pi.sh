@@ -10,6 +10,13 @@ cat > /etc/NetworkManager/conf.d/99-wifi-pm.conf << 'EOF'
 wifi.powersave = 2
 EOF
 
+# udev rule: disables power save at the driver level every time WiFi starts
+# Needed for Unisoc chips that ignore NM's power save setting
+cat > /etc/udev/rules.d/70-wifi-pm.rules << 'EOF'
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/sbin/iw dev %k set power_save off"
+EOF
+udevadm control --reload-rules
+
 echo "=== Setting WiFi auto-reconnect on all saved networks ==="
 for CON in $(nmcli -t -f NAME,TYPE con show | grep ':wifi$' | cut -d: -f1 | grep -v viviti-hotspot); do
   echo "  autoconnect: $CON"
@@ -44,7 +51,7 @@ systemctl restart viviti
 
 echo ""
 echo "=== Verification ==="
-iwconfig wlan0 | grep "Power Management"
+iw dev wlan0 get power_save 2>/dev/null || echo "(power_save check skipped)"
 ip addr show wlan0 | grep "inet "
 systemctl is-active viviti
 echo "Done."
