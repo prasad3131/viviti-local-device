@@ -55,6 +55,36 @@ def cosine_dist(a, b):
     return 1.0 - float(np.dot(a, b))
 
 
+def has_valid_face_structure(face_row):
+    """
+    Verify YuNet's 5 landmarks (right_eye, left_eye, nose, right_mouth, left_mouth)
+    form an anatomically plausible face in the work-image coordinate space.
+    Catches false positives (routers, textures, arms) where landmarks land randomly.
+    """
+    x, y, w, h = face_row[:4].astype(float)
+    re  = face_row[4:6]    # right eye
+    le  = face_row[6:8]    # left eye
+    nos = face_row[8:10]   # nose
+    rm  = face_row[10:12]  # right mouth corner
+    lm  = face_row[12:14]  # left mouth corner
+
+    pad = max(w, h) * 0.25
+    for pt in (re, le, nos, rm, lm):
+        if not (x - pad <= pt[0] <= x + w + pad and
+                y - pad <= pt[1] <= y + h + pad):
+            return False
+
+    eye_y   = (re[1] + le[1]) / 2.0
+    mouth_y = (rm[1] + lm[1]) / 2.0
+    if not (eye_y < nos[1] < mouth_y):
+        return False
+
+    if abs(re[0] - le[0]) < w * 0.10:
+        return False
+
+    return True
+
+
 def has_skin_tone(face_bgr, min_ratio=0.12):
     """Reject non-face crops (letters, objects, patterns) that have no skin-colored pixels.
     H: 0-18 (OpenCV) = standard 0-36° — warm skin tones but NOT yellow (H≥20).
@@ -127,6 +157,9 @@ def detect_faces_in(img_path, thumb_dir):
     for face in faces:
         x, y, w, h = face[:4].astype(int)
         score = float(face[14])
+
+        if not has_valid_face_structure(face):
+            continue
 
         x1 = max(0, int(x / scale))
         y1 = max(0, int(y / scale))
