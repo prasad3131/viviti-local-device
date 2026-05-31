@@ -196,6 +196,14 @@ router.put('/faces/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// DELETE /ai/faces/:id — delete a face cluster and all its face records
+router.delete('/faces/:id', (req, res) => {
+  const db = require('../db');
+  db.prepare('DELETE FROM photo_faces WHERE cluster_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM face_clusters WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 // GET /ai/faces/:id/photos — photos containing this person
 router.get('/faces/:id/photos', (req, res) => {
   const db = require('../db');
