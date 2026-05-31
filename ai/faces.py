@@ -57,9 +57,10 @@ def cosine_dist(a, b):
 
 def has_valid_face_structure(face_row):
     """
-    Verify YuNet's 5 landmarks (right_eye, left_eye, nose, right_mouth, left_mouth)
-    form an anatomically plausible face in the work-image coordinate space.
-    Catches false positives (routers, textures, arms) where landmarks land randomly.
+    Verify YuNet's 5 landmarks form an anatomically plausible face.
+    Checks landmark ordering, bbox containment, eye separation, and
+    proportion ratios — catches fabric folds, balloons, and random objects
+    that accidentally satisfy the simple ordering check.
     """
     x, y, w, h = face_row[:4].astype(float)
     re  = face_row[4:6]    # right eye
@@ -76,13 +77,42 @@ def has_valid_face_structure(face_row):
 
     eye_y   = (re[1] + le[1]) / 2.0
     mouth_y = (rm[1] + lm[1]) / 2.0
+
+    # Eye → nose → mouth must run top-to-bottom
     if not (eye_y < nos[1] < mouth_y):
         return False
 
-    if abs(re[0] - le[0]) < w * 0.10:
+    # Eyes must be horizontally separated (not stacked vertically)
+    eye_sep = abs(re[0] - le[0])
+    if eye_sep < w * 0.20:
+        return False
+
+    # Proportion checks — catches fabric/object "faces" with wrong anatomy
+    eye_to_nose   = nos[1] - eye_y
+    nose_to_mouth = mouth_y - nos[1]
+    # Both segments must be meaningful (not collapsed or spanning entire face)
+    if not (0.08 * h <= eye_to_nose   <= 0.50 * h):
+        return False
+    if not (0.06 * h <= nose_to_mouth <= 0.45 * h):
+        return False
+    # Total eye-to-mouth span must be 20-70% of face height
+    if not (0.20 * h <= (mouth_y - eye_y) <= 0.70 * h):
+        return False
+    # Eye separation must be 20-80% of face width
+    if not (0.20 * w <= eye_sep <= 0.80 * w):
         return False
 
     return True
+
+
+def has_face_texture(face_bgr):
+    """
+    Reject solid-color objects (gold balloons, painted walls) that have
+    negligible internal variation. Real faces always have some contrast.
+    """
+    small = cv2.resize(face_bgr, (40, 40))
+    gray  = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var() > 12
 
 
 def has_skin_tone(face_bgr, min_ratio=0.12):
@@ -178,6 +208,8 @@ def detect_faces_in(img_path, thumb_dir):
         if crop.size == 0:
             continue
         if not has_skin_tone(crop):
+            continue
+        if not has_face_texture(crop):
             continue
 
         hist = face_histogram(crop)
