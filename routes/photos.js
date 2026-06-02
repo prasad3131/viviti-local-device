@@ -130,11 +130,16 @@ router.get('/thumb', async (req, res) => {
   if (sharp) {
     // Sharp via concurrency-limited queue — max 4 simultaneous ops on weak ARM CPU
     if (!pendingThumbs.has(thumbPath)) {
+      // Grid thumbnails (≤400px): square crop centred on subject
+      // Viewer thumbnails (>400px): letterbox — preserve full image, no crop
+      const isViewer = size > 400;
       const p = runSharp(() =>
         sharp(fp)
           .rotate()
-          .resize(size, size, { fit: 'cover', position: 'attention' })
-          .jpeg({ quality: 82, progressive: true })
+          .resize(size, size, isViewer
+            ? { fit: 'inside', withoutEnlargement: true }
+            : { fit: 'cover', position: 'attention' })
+          .jpeg({ quality: isViewer ? 88 : 82, progressive: true })
           .toFile(thumbPath)
           .catch(() => null)
       ).finally(() => pendingThumbs.delete(thumbPath));
