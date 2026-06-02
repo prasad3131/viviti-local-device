@@ -14,6 +14,23 @@ const THUMB_DIR    = path.join(config.dataDir, 'thumbs');
 // Coalesces concurrent requests for the same thumbnail path into one resize op
 const pendingThumbs = new Map();
 
+// Limits concurrent Sharp ops — prevents CPU overload on weak ARM hardware
+const MAX_SHARP = 4;
+let sharpRunning = 0;
+const sharpQueue = [];
+function runSharp(fn) {
+  return new Promise((resolve, reject) => {
+    const execute = () => {
+      sharpRunning++;
+      fn().then(resolve, reject).finally(() => {
+        sharpRunning--;
+        if (sharpQueue.length > 0) sharpQueue.shift()();
+      });
+    };
+    sharpRunning < MAX_SHARP ? execute() : sharpQueue.push(execute);
+  });
+}
+
 const router = express.Router();
 
 const IMAGE_RE = /\.(jpg|jpeg|png|gif|heic|raw|cr2|arw|nef|dng)$/i;
@@ -111,15 +128,16 @@ router.get('/thumb', async (req, res) => {
   fs.mkdirSync(THUMB_DIR, { recursive: true });
 
   if (sharp) {
-    // Sharp (Node.js native) — no subprocess, handles concurrent requests
+    // Sharp via concurrency-limited queue — max 4 simultaneous ops on weak ARM CPU
     if (!pendingThumbs.has(thumbPath)) {
-      const p = sharp(fp)
-        .rotate()                                                  // auto-orient via EXIF
-        .resize(size, size, { fit: 'cover', position: 'attention' })
-        .jpeg({ quality: 82, progressive: true })
-        .toFile(thumbPath)
-        .catch(() => null)
-        .finally(() => pendingThumbs.delete(thumbPath));
+      const p = runSharp(() =>
+        sharp(fp)
+          .rotate()
+          .resize(size, size, { fit: 'cover', position: 'attention' })
+          .jpeg({ quality: 82, progressive: true })
+          .toFile(thumbPath)
+          .catch(() => null)
+      ).finally(() => pendingThumbs.delete(thumbPath));
       pendingThumbs.set(thumbPath, p);
     }
     try { await pendingThumbs.get(thumbPath); } catch {}
