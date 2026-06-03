@@ -111,7 +111,8 @@ router.get('/thumb', async (req, res) => {
   const dir  = safeDirPath(req.query.path || '');
   const name = path.basename(String(req.query.name || ''));
   const fp   = path.join(dir, name);
-  const size = Math.min(400, Math.max(50, parseInt(req.query.size) || 200));
+  const size = Math.min(1200, Math.max(50, parseInt(req.query.size) || 200));
+  const v    = req.query.v ? `_v${String(req.query.v).replace(/[^a-z0-9]/gi, '')}` : '';
 
   if (!fp.startsWith(config.photoDir) || !fs.existsSync(fp)) {
     return res.status(404).json({ error: 'Not found' });
@@ -120,7 +121,7 @@ router.get('/thumb', async (req, res) => {
   if (VIDEO_RE.test(name)) return res.status(415).json({ error: 'No thumb for video' });
 
   const key       = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
-  const thumbPath = path.join(THUMB_DIR, `${key}_${size}.jpg`);
+  const thumbPath = path.join(THUMB_DIR, `${key}_${size}${v}.jpg`);
 
   const serve = (f) => {
     res.setHeader('Cache-Control', 'public, max-age=604800');
