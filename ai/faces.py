@@ -27,8 +27,8 @@ except Exception:
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
 MIN_FACE_PX          = 30
 MAX_FACE_AR          = 1.2
-SIMILARITY_THRESHOLD = 0.22
-CONSOLIDATION_THRESHOLD = 0.18
+SIMILARITY_THRESHOLD = 0.18       # tighter — LBP is more discriminative than HSV
+CONSOLIDATION_THRESHOLD = 0.14
 
 # YuNet fallback settings (only used if MediaPipe unavailable)
 _SCORE_THRESHOLD_YN = 0.20   # raised from 0.13 — fewer false positives
@@ -53,11 +53,39 @@ if not USE_MEDIAPIPE and MODEL_PATH.exists():
 # ── Feature extraction ────────────────────────────────────────────────────────
 
 def face_histogram(face_bgr):
-    hsv = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2HSV)
-    h_hist = cv2.calcHist([hsv], [0], None, [32], [0, 180]).flatten()
-    s_hist = cv2.calcHist([hsv], [1], None, [32], [0, 256]).flatten()
-    v_hist = cv2.calcHist([hsv], [2], None, [64], [0, 256]).flatten()
-    feat = np.concatenate([h_hist, s_hist, v_hist])
+    """
+    Combined LBP texture + HSV colour descriptor.
+    LBP captures face structure (eyes, nose, mouth layout) independent of
+    lighting; HSV colour adds skin-tone context. Together they are far more
+    discriminative than HSV alone and don't require a neural network.
+    """
+    gray   = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
+    resized = cv2.resize(gray, (64, 64))
+
+    # LBP: radius=1, 8 neighbours, uniform patterns (59 bins)
+    lbp_hist = np.zeros(256, dtype=np.float32)
+    rows, cols = resized.shape
+    for r in range(1, rows - 1):
+        for c in range(1, cols - 1):
+            center = int(resized[r, c])
+            code = 0
+            neighbours = [
+                resized[r-1, c-1], resized[r-1, c], resized[r-1, c+1],
+                resized[r,   c+1],
+                resized[r+1, c+1], resized[r+1, c], resized[r+1, c-1],
+                resized[r,   c-1],
+            ]
+            for i, nb in enumerate(neighbours):
+                if int(nb) >= center:
+                    code |= (1 << i)
+            lbp_hist[code] += 1
+
+    # HSV colour (coarser bins — texture is primary, colour secondary)
+    hsv    = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2HSV)
+    h_hist = cv2.calcHist([hsv], [0], None, [16], [0, 180]).flatten()
+    s_hist = cv2.calcHist([hsv], [1], None, [16], [0, 256]).flatten()
+
+    feat = np.concatenate([lbp_hist * 2.0, h_hist, s_hist])  # weight LBP higher
     norm = np.linalg.norm(feat)
     return (feat / norm).tolist() if norm > 0 else feat.tolist()
 
