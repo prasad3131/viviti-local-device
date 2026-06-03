@@ -266,25 +266,29 @@ def init_db(conn):
     conn.commit()
 
 
+NAMED_SIMILARITY_THRESHOLD = 0.10  # named clusters need very high confidence to accept new faces
+
 def assign_cluster(conn, histogram, exclude=None):
     if exclude is None:
         exclude = set()
     arr  = np.array(histogram)
     rows = conn.execute(
-        'SELECT id, centroid FROM face_clusters WHERE centroid IS NOT NULL'
+        'SELECT id, centroid, name FROM face_clusters WHERE centroid IS NOT NULL'
     ).fetchall()
     best_id, best_dist = None, float('inf')
-    for cid, cent_json in rows:
+    for cid, cent_json, name in rows:
         if cid in exclude:
             continue
         d = cosine_dist(arr, np.array(json.loads(cent_json)))
-        if d < best_dist:
+        # Named clusters: only accept if very confident — avoids cross-person contamination
+        threshold = NAMED_SIMILARITY_THRESHOLD if name else SIMILARITY_THRESHOLD
+        if d < best_dist and d < threshold:
             best_dist, best_id = d, cid
-    if best_id is not None and best_dist < SIMILARITY_THRESHOLD:
+    if best_id is not None:
         old   = np.array(json.loads(
             conn.execute('SELECT centroid FROM face_clusters WHERE id=?', (best_id,)).fetchone()[0]
         ))
-        new_c = old * 0.8 + arr * 0.2
+        new_c = old * 0.85 + arr * 0.15   # slower centroid drift for stability
         norm  = np.linalg.norm(new_c)
         if norm > 0:
             new_c /= norm
@@ -301,6 +305,8 @@ def assign_cluster(conn, histogram, exclude=None):
 
 
 def consolidate_clusters(conn):
+    """Merge similar UNNAMED clusters only. Named clusters are never touched —
+    once a user assigns a name, that cluster is locked."""
     rows = conn.execute(
         'SELECT id, centroid, name, photo_count, sample_thumb, best_score '
         'FROM face_clusters WHERE centroid IS NOT NULL ORDER BY photo_count DESC'
@@ -308,19 +314,16 @@ def consolidate_clusters(conn):
     merged = set()
     for i in range(len(rows)):
         id1, c1, name1, count1, thumb1, score1 = rows[i]
-        if id1 in merged:
+        if id1 in merged or name1:   # never merge a named cluster
             continue
         arr1 = np.array(json.loads(c1))
         for j in range(i + 1, len(rows)):
             id2, c2, name2, count2, thumb2, score2 = rows[j]
-            if id2 in merged:
+            if id2 in merged or name2:   # never merge into a named cluster
                 continue
             if cosine_dist(arr1, np.array(json.loads(c2))) < CONSOLIDATION_THRESHOLD:
                 conn.execute('UPDATE photo_faces SET cluster_id=? WHERE cluster_id=?', (id1, id2))
                 conn.execute('UPDATE face_clusters SET photo_count=photo_count+? WHERE id=?', (count2, id1))
-                if name2 and not name1:
-                    conn.execute('UPDATE face_clusters SET name=? WHERE id=?', (name2, id1))
-                    name1 = name2
                 if (score2 or 0) > (score1 or 0):
                     conn.execute('UPDATE face_clusters SET sample_thumb=?, best_score=? WHERE id=?',
                                  (thumb2, score2, id1))
