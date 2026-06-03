@@ -17,17 +17,17 @@ def run_detect(photo_path, db_path, photo_dir):
     init_db(conn)
 
     rel_path = os.path.relpath(photo_path, photo_dir).replace('\\', '/')
-
-    # Always re-detect this photo fresh so user gets correct results on re-run
     conn.execute('DELETE FROM photo_faces WHERE photo_path = ?', (rel_path,))
 
     face_list = detect_faces_in(photo_path, thumb_dir)
     results = []
-    used_clusters = set()  # Each face in the same photo must go to a different cluster
+    used_clusters = set()
 
     for face in face_list:
-        cid = assign_cluster(conn, face['histogram'], exclude=used_clusters)
+        embedding = face['embedding']   # SFace or LBP — key is always 'embedding'
+        cid = assign_cluster(conn, embedding, exclude=used_clusters)
         used_clusters.add(cid)
+
         row = conn.execute(
             'SELECT name, sample_thumb FROM face_clusters WHERE id=?', (cid,)
         ).fetchone()
@@ -40,7 +40,7 @@ def run_detect(photo_path, db_path, photo_dir):
         conn.execute(
             'INSERT INTO photo_faces (photo_path,cluster_id,histogram,x,y,w,h,thumb_path) '
             'VALUES (?,?,?,?,?,?,?,?)',
-            (rel_path, cid, json.dumps(face['histogram']),
+            (rel_path, cid, json.dumps(embedding),
              face['x'], face['y'], face['w'], face['h'], face['thumb_path'])
         )
         results.append({
