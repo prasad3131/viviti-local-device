@@ -8,6 +8,10 @@ const config = require('../config');
 let sharp;
 try { sharp = require('sharp'); } catch { sharp = null; }
 
+const PYTHON = fs.existsSync('/opt/ai-env/bin/python3')
+  ? '/opt/ai-env/bin/python3'
+  : 'python3';
+
 const EXIF_SCRIPT  = path.join(__dirname, '..', 'ai', 'exif.py');
 const THUMB_DIR    = path.join(config.dataDir, 'thumbs');
 
@@ -39,7 +43,7 @@ const MEDIA_RE = /\.(jpg|jpeg|png|gif|heic|raw|cr2|arw|nef|dng|mp4|mov|avi|mkv|m
 
 function runPython(scriptPath, args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const py = spawn('python3', [scriptPath, ...args]);
+    const py = spawn(PYTHON, [scriptPath, ...args]);
     let out = '', err = '';
     const timer = setTimeout(() => { py.kill(); reject(new Error('Python timeout')); }, timeoutMs);
     py.stdout.on('data', d => { out += d; });
@@ -149,7 +153,7 @@ router.get('/thumb', async (req, res) => {
   } else {
     // Fallback: Python (slow — run npm install on device to get Sharp)
     await new Promise(resolve => {
-      const py = spawn('python3', [
+      const py = spawn(PYTHON, [
         path.join(__dirname, '..', 'ai', 'thumb.py'), fp, thumbPath, String(size),
       ]);
       py.on('close', resolve);

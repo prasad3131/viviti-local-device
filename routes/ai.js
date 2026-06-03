@@ -12,6 +12,11 @@ const DETECT_PHOTO_SCRIPT  = path.join(__dirname, '..', 'ai', 'detect_photo.py')
 const DB_PATH         = path.join(config.dataDir, 'viviti.db');
 const FACE_THUMB_DIR  = path.join(config.dataDir, 'face_thumbs');
 
+// Use venv Python if available (needed for mediapipe on Python 3.13 systems)
+const PYTHON = fs.existsSync('/opt/ai-env/bin/python3')
+  ? '/opt/ai-env/bin/python3'
+  : 'python3';
+
 function safePath(userPath, name) {
   const parts = String(userPath || '').split('/').map(p => path.basename(p)).filter(Boolean);
   const dir = path.join(config.photoDir, ...parts);
@@ -23,7 +28,7 @@ function safePath(userPath, name) {
 
 function runPython(scriptPath, args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const py = spawn('python3', [scriptPath, ...args]);
+    const py = spawn(PYTHON, [scriptPath, ...args]);
     let out = '', err = '';
     const timer = setTimeout(() => { py.kill(); reject(new Error('Python timeout')); }, timeoutMs);
     py.stdout.on('data', d => { out += d; });
