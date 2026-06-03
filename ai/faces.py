@@ -15,8 +15,9 @@ import numpy as np
 from pathlib import Path
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png'}
-MIN_FACE_PX  = 30
-MAX_FACE_AR  = 1.2
+MIN_FACE_PX      = 40    # raised — very small detections are usually noise
+MAX_FACE_AR      = 1.15  # tighter — real faces are nearly square or portrait
+MIN_FACE_AREA_RATIO = 0.003  # face must be ≥0.3% of image area (filters background tiny faces)
 
 # Thresholds when using SFace embeddings (128-d, cosine distance)
 SFACE_SIMILARITY_THRESHOLD    = 0.50   # merge into cluster if cosine dist < this
@@ -33,7 +34,7 @@ YUNET_PATH = MODEL_DIR / 'face_detection_yunet_2023mar.onnx'
 SFACE_PATH = MODEL_DIR / 'face_recognition_sface_2021dec_int8.onnx'
 MAX_DIM    = 1280
 
-SCORE_THRESHOLD = 0.20
+SCORE_THRESHOLD = 0.45   # raised from 0.20 — SFace handles ID, detection can be strict
 NMS_THRESHOLD   = 0.3
 
 
@@ -116,7 +117,7 @@ def has_face_texture(face_bgr):
     return cv2.Laplacian(gray, cv2.CV_64F).var() > 12
 
 
-def has_skin_tone(face_bgr, min_ratio=0.12):
+def has_skin_tone(face_bgr, min_ratio=0.18):  # raised — dark false positives fail this
     hsv  = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2HSV)
     mask = cv2.bitwise_or(
         cv2.inRange(hsv, (0,  20, 40), (18, 180, 240)),
@@ -178,10 +179,11 @@ def detect_faces_in(img_path, thumb_dir):
 
         if fw < MIN_FACE_PX or fh < MIN_FACE_PX: continue
         if fh > 0 and fw/fh > MAX_FACE_AR:        continue
+        if (fw * fh) / (iw * ih) < MIN_FACE_AREA_RATIO: continue  # skip tiny background faces
 
         crop = img[y1:y2, x1:x2]
-        if crop.size == 0:           continue
-        if not has_skin_tone(crop):  continue
+        if crop.size == 0:             continue
+        if not has_skin_tone(crop):    continue
         if not has_face_texture(crop): continue
 
         # ── Embedding ────────────────────────────────────────────────────────
