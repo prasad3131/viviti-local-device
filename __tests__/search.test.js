@@ -13,7 +13,7 @@ const SEARCH_SYNONYMS = {
   cat:    ['cat'],
   car:    ['car', 'truck'],
   flower: ['potted plant', 'vase'],
-  food:   ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'bowl'],
+  food:   ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake'],
   phone:  ['cell phone'],
 };
 
@@ -68,6 +68,10 @@ describe('object matching (COCO)', () => {
 
   test('"food" matches "pizza"', () => {
     expect(matches(['pizza', 'bottle'], 'food')).toBe(true);
+  });
+
+  test('"food" does NOT match a bowl/potted-plant photo — garden-leak regression', () => {
+    expect(matches(['bowl', 'potted plant'], 'food')).toBe(false);
   });
 
   test('direct COCO label match works', () => {

@@ -406,8 +406,9 @@ const SEARCH_SYNONYMS = {
   // plants / nature
   flower:    ['potted plant', 'vase'],
   plant:     ['potted plant'],
-  // food & drink
-  food:      ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'bowl'],
+  // food & drink — only actual edible items (no 'bowl': it's tableware and
+  // matches plant pots, leaking garden photos into "food" results).
+  food:      ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake'],
   fruit:     ['banana', 'apple', 'orange'],
   pizza:     ['pizza'],
   cake:      ['cake'],
