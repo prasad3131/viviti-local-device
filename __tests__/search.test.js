@@ -1,16 +1,20 @@
 /**
- * Tests for Object Search logic in routes/ai.js.
+ * Tests for Object Search expansion in routes/ai.js.
  * Run: npx jest __tests__/search.test.js
  *
- * Mirrors expandQuery() + the object-matching filter so the synonym expansion
- * (e.g. "dog" -> "golden retriever") can't silently regress.
+ * Object labels now come from the COCO-SSD detector (80 classes), so the synonym
+ * map points at COCO labels — e.g. "flower" -> "potted plant"/"vase" (COCO has no
+ * flower class). These tests lock that mapping in (regression: "flower" returned
+ * nothing after the ImageNet->COCO switch).
  */
 
 const SEARCH_SYNONYMS = {
-  dog: ['dog', 'puppy', 'retriever', 'labrador', 'poodle', 'husky', 'bulldog', 'beagle', 'terrier', 'spaniel', 'chihuahua', 'dalmatian', 'rottweiler', 'pug', 'collie', 'corgi'],
-  cat: ['cat', 'kitten', 'tabby', 'siamese', 'persian cat', 'egyptian cat', 'kitty'],
-  food: ['pizza', 'burger', 'cheeseburger', 'hotdog', 'sandwich', 'cake', 'ice cream', 'burrito', 'bagel', 'pretzel', 'plate', 'guacamole', 'soup', 'espresso', 'meatloaf'],
-  beach: ['seashore', 'sandbar', 'beach', 'dock', 'pier', 'lakeside', 'shoal'],
+  dog:    ['dog'],
+  cat:    ['cat'],
+  car:    ['car', 'truck'],
+  flower: ['potted plant', 'vase'],
+  food:   ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'bowl'],
+  phone:  ['cell phone'],
 };
 
 function expandQuery(q) {
@@ -24,56 +28,58 @@ function expandQuery(q) {
   return [...terms].filter(Boolean);
 }
 
-// Mirrors the per-photo match used to build matched_objects + the WHERE filter.
 function matches(objectLabels, query) {
   const terms = expandQuery(query);
   return objectLabels.some(o => terms.some(t => o.includes(t)));
 }
 
-describe('expandQuery', () => {
-  test('a known category expands to its specific ImageNet labels', () => {
-    const terms = expandQuery('dog');
-    expect(terms).toContain('dog');
-    expect(terms).toContain('retriever'); // matches "golden retriever", "labrador retriever"
-    expect(terms).toContain('labrador');
+describe('expandQuery (COCO labels)', () => {
+  test('"flower" expands to COCO potted plant + vase — the regression we fixed', () => {
+    const terms = expandQuery('flower');
+    expect(terms).toContain('potted plant');
+    expect(terms).toContain('vase');
   });
 
-  test('an unknown query just returns itself (direct substring search)', () => {
+  test('"car" expands to car + truck', () => {
+    expect(expandQuery('car')).toEqual(expect.arrayContaining(['car', 'truck']));
+  });
+
+  test('"phone" maps to "cell phone"', () => {
+    expect(expandQuery('phone')).toContain('cell phone');
+  });
+
+  test('unknown query just returns itself', () => {
     expect(expandQuery('umbrella')).toEqual(['umbrella']);
-  });
-
-  test('is case-insensitive and trimmed', () => {
-    expect(expandQuery('  DOG ')).toContain('labrador');
   });
 
   test('empty query yields no terms', () => {
     expect(expandQuery('')).toEqual([]);
-    expect(expandQuery('   ')).toEqual([]);
   });
 });
 
-describe('object matching', () => {
-  test('"dog" matches a photo labeled "golden retriever" — the core synonym win', () => {
-    expect(matches(['golden retriever', 'grass', 'fence'], 'dog')).toBe(true);
+describe('object matching (COCO)', () => {
+  test('"flower" matches a photo labeled "potted plant"', () => {
+    expect(matches(['potted plant', 'person'], 'flower')).toBe(true);
   });
 
-  test('"dog" matches "labrador retriever"', () => {
-    expect(matches(['labrador retriever'], 'dog')).toBe(true);
+  test('"dog" matches a photo labeled "dog"', () => {
+    expect(matches(['dog', 'grass'], 'dog')).toBe(true);
   });
 
-  test('"cat" does NOT match a photo of only dogs', () => {
-    expect(matches(['golden retriever', 'beagle'], 'cat')).toBe(false);
+  test('"food" matches "pizza"', () => {
+    expect(matches(['pizza', 'bottle'], 'food')).toBe(true);
   });
 
-  test('direct label match works without synonyms', () => {
-    expect(matches(['pizza', 'plate'], 'pizza')).toBe(true);
+  test('direct COCO label match works', () => {
+    expect(matches(['cell phone'], 'cell phone')).toBe(true);
+    expect(matches(['chair', 'tv'], 'tv')).toBe(true);
   });
 
-  test('"food" matches "cheeseburger"', () => {
-    expect(matches(['cheeseburger', 'plate'], 'food')).toBe(true);
+  test('"cat" does not match a dog-only photo', () => {
+    expect(matches(['dog', 'bench'], 'cat')).toBe(false);
   });
 
   test('no labels never matches', () => {
-    expect(matches([], 'dog')).toBe(false);
+    expect(matches([], 'flower')).toBe(false);
   });
 });

@@ -375,22 +375,61 @@ router.get('/highlights', (req, res) => {
 // Searches the `objects` column (top-5 ImageNet labels per photo, written by the
 // scene pass) + `scene_tags`. No new model, no network — pure on-device lookup.
 
-// User-friendly query -> extra substrings to match in the specific ImageNet
-// labels (e.g. searching "dog" should hit "golden retriever", "labrador", ...).
+// User-friendly query -> COCO-SSD object labels (+ scene tags) that should match.
+// Objects come from the COCO detector (80 classes), so e.g. "flower" must map to
+// "potted plant"/"vase" (COCO has no flower class). Scene words (beach, nature,
+// outdoor, ...) also match the scene_tags column via the raw query.
 const SEARCH_SYNONYMS = {
-  dog:      ['dog', 'puppy', 'retriever', 'labrador', 'poodle', 'husky', 'bulldog', 'beagle', 'terrier', 'spaniel', 'chihuahua', 'dalmatian', 'rottweiler', 'pug', 'collie', 'corgi'],
-  cat:      ['cat', 'kitten', 'tabby', 'siamese', 'persian cat', 'egyptian cat', 'kitty'],
-  bird:     ['bird', 'parrot', 'finch', 'robin', 'jay', 'magpie', 'peacock', 'flamingo', 'duck', 'goose', 'owl', 'eagle', 'hummingbird', 'macaw'],
-  car:      ['car', 'convertible', 'sports car', 'jeep', 'limousine', 'minivan', 'cab', 'station wagon', 'race car'],
-  food:     ['pizza', 'burger', 'cheeseburger', 'hotdog', 'sandwich', 'cake', 'ice cream', 'burrito', 'bagel', 'pretzel', 'plate', 'guacamole', 'soup', 'espresso', 'meatloaf'],
-  flower:   ['flower', 'daisy', 'sunflower', 'dandelion', 'rose', 'tulip', 'orchid', 'lily'],
-  beach:    ['seashore', 'sandbar', 'beach', 'dock', 'pier', 'lakeside', 'shoal'],
-  mountain: ['alp', 'valley', 'cliff', 'volcano', 'mountain', 'promontory'],
-  baby:     ['baby', 'crib', 'cradle', 'diaper', 'bib', 'bassinet'],
-  phone:    ['cellular telephone', 'cellphone', 'phone', 'smartphone', 'ipod'],
-  laptop:   ['laptop', 'notebook', 'computer'],
-  tree:     ['tree', 'oak', 'pine', 'palm', 'maple'],
-  water:    ['lake', 'sea', 'ocean', 'river', 'fountain', 'waterfall'],
+  // animals
+  dog:       ['dog'],
+  puppy:     ['dog'],
+  cat:       ['cat'],
+  kitten:    ['cat'],
+  bird:      ['bird'],
+  horse:     ['horse'],
+  cow:       ['cow'],
+  sheep:     ['sheep'],
+  animal:    ['dog', 'cat', 'bird', 'horse', 'cow', 'sheep', 'elephant', 'bear', 'zebra', 'giraffe'],
+  pet:       ['dog', 'cat', 'bird'],
+  // vehicles
+  car:       ['car', 'truck'],
+  truck:     ['truck'],
+  bus:       ['bus'],
+  bike:      ['bicycle', 'motorcycle'],
+  bicycle:   ['bicycle'],
+  motorcycle:['motorcycle'],
+  train:     ['train'],
+  boat:      ['boat'],
+  plane:     ['airplane'],
+  airplane:  ['airplane'],
+  vehicle:   ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'train', 'airplane', 'boat'],
+  // plants / nature
+  flower:    ['potted plant', 'vase'],
+  plant:     ['potted plant'],
+  // food & drink
+  food:      ['banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'bowl'],
+  fruit:     ['banana', 'apple', 'orange'],
+  pizza:     ['pizza'],
+  cake:      ['cake'],
+  drink:     ['bottle', 'wine glass', 'cup'],
+  bottle:    ['bottle'],
+  // people / things
+  baby:      ['person'],
+  people:    ['person'],
+  phone:     ['cell phone'],
+  laptop:    ['laptop'],
+  computer:  ['laptop', 'keyboard', 'mouse', 'tv'],
+  tv:        ['tv'],
+  television:['tv'],
+  furniture: ['chair', 'couch', 'bed', 'dining table', 'bench'],
+  couch:     ['couch'],
+  sofa:      ['couch'],
+  bag:       ['backpack', 'handbag', 'suitcase'],
+  toy:       ['teddy bear'],
+  teddy:     ['teddy bear'],
+  // sports
+  sport:     ['sports ball', 'tennis racket', 'baseball bat', 'skateboard', 'surfboard', 'frisbee', 'skis', 'snowboard', 'baseball glove', 'kite'],
+  ball:      ['sports ball'],
 };
 
 function expandQuery(q) {
