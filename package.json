@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "jest --testPathPattern=__tests__"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",

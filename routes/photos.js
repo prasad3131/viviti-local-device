@@ -150,7 +150,12 @@ router.get('/thumb', async (req, res) => {
       ).finally(() => pendingThumbs.delete(thumbPath));
       pendingThumbs.set(thumbPath, p);
     }
-    try { await pendingThumbs.get(thumbPath); } catch {}
+    try {
+      await Promise.race([
+        pendingThumbs.get(thumbPath),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
+      ]);
+    } catch { pendingThumbs.delete(thumbPath); }
   } else {
     // Fallback: Python (slow — run npm install on device to get Sharp)
     await new Promise(resolve => {
