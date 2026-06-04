@@ -191,8 +191,18 @@ def run_batch(photo_dir, db_path):
             if updated % 25 == 0:
                 conn.commit()
     conn.commit()
+
+    # Prune orphan rows whose photo files were deleted — otherwise stale labels
+    # linger and search can return dead (blank) results.
+    removed = 0
+    for (pp,) in conn.execute('SELECT photo_path FROM photo_ai').fetchall():
+        ap = os.path.join(photo_dir, pp.replace('/', os.sep))
+        if not os.path.exists(ap):
+            conn.execute('DELETE FROM photo_ai WHERE photo_path=?', (pp,))
+            removed += 1
+    conn.commit()
     conn.close()
-    print(json.dumps({'updated': updated}))
+    print(json.dumps({'updated': updated, 'pruned_orphans': removed}))
 
 
 if __name__ == '__main__':
