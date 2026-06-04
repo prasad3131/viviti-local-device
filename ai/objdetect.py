@@ -74,6 +74,10 @@ class ObjectDetector:
 
         with open(labels_path) as f:
             self._labels = [l.strip() for l in f if l.strip()]
+        # This labelmap prepends a '???' placeholder, so the model's 0-based class
+        # indices map to labels[idx + 1] (class 0 = "person"). Detect that and
+        # offset; fall back to 0 for labelmaps without the placeholder.
+        self._label_offset = 1 if self._labels and self._labels[0] in ('???', 'background', '') else 0
 
         # Map the 4 SSD-postprocess outputs by shape (order varies by export):
         #   boxes  -> ndim 3, last dim 4
@@ -127,7 +131,7 @@ class ObjectDetector:
         for cls, sc in zip(classes, scores):
             if sc < SCORE_THRESHOLD:
                 continue
-            idx = int(cls)
+            idx = int(cls) + self._label_offset
             if 0 <= idx < len(self._labels):
                 label = self._labels[idx].lower()
                 if label in ('???', '', 'background'):
