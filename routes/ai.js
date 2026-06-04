@@ -9,6 +9,7 @@ const CRITIQUE_SCRIPT      = path.join(__dirname, '..', 'ai', 'critique.py');
 const BATCH_SCRIPT         = path.join(__dirname, '..', 'ai', 'batch.py');
 const FACES_SCRIPT         = path.join(__dirname, '..', 'ai', 'faces.py');
 const DETECT_PHOTO_SCRIPT  = path.join(__dirname, '..', 'ai', 'detect_photo.py');
+const OBJDETECT_SCRIPT     = path.join(__dirname, '..', 'ai', 'objdetect.py');
 const DB_PATH         = path.join(config.dataDir, 'viviti.db');
 const FACE_THUMB_DIR  = path.join(config.dataDir, 'face_thumbs');
 
@@ -462,6 +463,20 @@ router.get('/objects', (_req, res) => {
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count);
   res.json({ objects: list });
+});
+
+// POST /ai/objects/rescan — re-run object detection across the whole library and
+// update the `objects` column (leaves blur/dup/scene data untouched). Background.
+let objRescanRunning = false;
+router.post('/objects/rescan', (_req, res) => {
+  res.json({ ok: true, already_running: objRescanRunning });
+  if (objRescanRunning) return;
+  objRescanRunning = true;
+  console.log('[AI] Object re-scan started');
+  runPython(OBJDETECT_SCRIPT, ['--batch', config.photoDir, DB_PATH], 30 * 60_000)
+    .then(r  => console.log('[AI] Object re-scan done:', r))
+    .catch(e => console.error('[AI] Object re-scan error:', e.message))
+    .finally(() => { objRescanRunning = false; });
 });
 
 module.exports = { router, triggerBatch };

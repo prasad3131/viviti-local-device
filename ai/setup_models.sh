@@ -24,5 +24,22 @@ if [ ! -f "$SFACE" ]; then
 fi
 echo "SFace ready: $SFACE"
 
+# ── COCO-SSD MobileNet object detector — TFLite quant (~6.9 MB) ───────────────
+# Bundled labelmap (no class-index guessing). Powers accurate Object Search.
+OBJ="$DIR/coco_ssd_mobilenet_v1.tflite"
+if [ ! -f "$OBJ" ]; then
+  echo "Downloading COCO-SSD object detection model (~6.9 MB)..."
+  TMP="$DIR/objdetect.zip"
+  wget -q --show-progress -O "$TMP" \
+    "https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip"
+  unzip -o -j "$TMP" '*.tflite' -d "$DIR" >/dev/null
+  unzip -o -j "$TMP" '*labelmap*' -d "$DIR" >/dev/null
+  # Normalize filenames to what objdetect.py expects
+  [ -f "$DIR/detect.tflite" ] && mv -f "$DIR/detect.tflite" "$OBJ"
+  [ -f "$DIR/labelmap.txt" ] && mv -f "$DIR/labelmap.txt" "$DIR/coco_ssd_labels.txt"
+  rm -f "$TMP"
+fi
+echo "Object detector ready: $OBJ"
+
 echo ""
 echo "All models downloaded. Restart viviti: sudo systemctl restart viviti"

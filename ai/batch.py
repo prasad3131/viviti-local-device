@@ -22,6 +22,12 @@ try:
 except ImportError:
     HAS_SCENE = False
 
+try:
+    import objdetect as objdetect_mod
+    HAS_OBJDETECT = True
+except ImportError:
+    HAS_OBJDETECT = False
+
 IMAGE_EXT      = {'.jpg', '.jpeg', '.png', '.heic', '.cr2', '.arw', '.nef', '.dng'}
 # Laplacian-variance cutoff. 100 over-flagged phone JPEGs with bokeh/low-light
 # backgrounds (real libraries cluster ≤24 for truly blurry, then jump to ~49+ for
@@ -96,8 +102,9 @@ def run_batch(photo_dir, db_path):
         for row in conn.execute('SELECT photo_path, phash FROM photo_ai WHERE phash IS NOT NULL'):
             existing_hashes[row[0]] = row[1]
 
-    # Load scene detector once for the whole batch
+    # Load detectors once for the whole batch
     detector = scene_mod.SceneDetector() if HAS_SCENE else None
+    obj_detector = objdetect_mod.ObjectDetector() if HAS_OBJDETECT else None
 
     counts = {'processed': 0, 'blurry': 0, 'duplicates': 0, 'tagged': 0}
 
@@ -129,11 +136,23 @@ def run_batch(photo_dir, db_path):
             try:
                 result     = detector.analyse(abs_path)
                 scene_tags = json.dumps(result.get('scene_tags', []))
-                objects    = json.dumps(result.get('objects', []))
                 if result.get('scene_tags'):
                     counts['tagged'] += 1
             except Exception as e:
                 print(f'[scene] {rel_path}: {e}', file=sys.stderr)
+
+        # Accurate object labels (COCO-SSD) drive Object Search; fall back to the
+        # scene model's coarse ImageNet guesses only if the detector is missing.
+        if obj_detector:
+            try:
+                objects = json.dumps(obj_detector.detect(abs_path))
+            except Exception as e:
+                print(f'[objdetect] {rel_path}: {e}', file=sys.stderr)
+        elif detector and objects is None:
+            try:
+                objects = json.dumps(detector.analyse(abs_path).get('objects', []))
+            except Exception:
+                pass
 
         conn.execute('''
             INSERT OR REPLACE INTO photo_ai
