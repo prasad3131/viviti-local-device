@@ -405,6 +405,7 @@ function expandQuery(q) {
 }
 
 // GET /ai/search?q=dog&path=folder
+// Matches objects + scene tags AND people's names (the names assigned to faces).
 router.get('/search', (req, res) => {
   const db = require('../db');
   const q  = String(req.query.q || '').trim();
@@ -413,34 +414,56 @@ router.get('/search', (req, res) => {
   const terms  = expandQuery(q);
   const prefix = req.query.path ? String(req.query.path) + '/' : '';
 
-  const likes = [];
-  const params = [];
-  for (const t of terms) {
-    likes.push('objects LIKE ?');    params.push(`%${t}%`);
-    likes.push('scene_tags LIKE ?'); params.push(`%${t}%`);
-  }
-  params.push(prefix + '%');
+  // photo_path -> { matched: string[], person: string|null }
+  const hits = new Map();
+  const add = (photo_path, label, isPerson) => {
+    let e = hits.get(photo_path);
+    if (!e) { e = { matched: [], person: null }; hits.set(photo_path, e); }
+    if (isPerson) e.person = label;
+    if (label && !e.matched.includes(label)) e.matched.push(label);
+  };
 
-  let rows;
+  // 1. Object / scene matches
   try {
-    rows = db.prepare(
+    const likes = [];
+    const params = [];
+    for (const t of terms) {
+      likes.push('objects LIKE ?');    params.push(`%${t}%`);
+      likes.push('scene_tags LIKE ?'); params.push(`%${t}%`);
+    }
+    params.push(prefix + '%');
+    const rows = db.prepare(
       `SELECT photo_path, objects FROM photo_ai
        WHERE (${likes.join(' OR ')}) AND photo_path LIKE ?
        ORDER BY photo_path DESC LIMIT 500`
     ).all(...params);
-  } catch {
-    return res.json({ photos: [], terms });
-  }
+    for (const { photo_path, objects } of rows) {
+      let matched = [];
+      try { matched = JSON.parse(objects || '[]').filter(o => terms.some(t => o.includes(t))); } catch {}
+      matched.slice(0, 3).forEach(m => add(photo_path, m, false));
+      if (matched.length === 0) add(photo_path, null, false);
+    }
+  } catch {}
 
-  const photos = rows.map(({ photo_path, objects }) => {
+  // 2. People-name matches — names the user assigned to face clusters
+  try {
+    const people = db.prepare(
+      `SELECT DISTINCT pf.photo_path AS photo_path, fc.name AS name
+       FROM photo_faces pf JOIN face_clusters fc ON fc.id = pf.cluster_id
+       WHERE fc.name IS NOT NULL AND fc.name != '' AND fc.name LIKE ? AND pf.photo_path LIKE ?
+       LIMIT 500`
+    ).all(`%${q}%`, prefix + '%');
+    for (const { photo_path, name } of people) add(photo_path, name, true);
+  } catch {}
+
+  const photos = [...hits.entries()].map(([photo_path, info]) => {
     const i = photo_path.lastIndexOf('/');
-    let matched = [];
-    try { matched = JSON.parse(objects || '[]').filter(o => terms.some(t => o.includes(t))); } catch {}
     return {
       photo_path,
       folder: i >= 0 ? photo_path.slice(0, i) : '',
       name:   i >= 0 ? photo_path.slice(i + 1) : photo_path,
-      matched_objects: matched.slice(0, 3),
+      matched_objects: info.matched.slice(0, 3),
+      person: info.person || undefined,
     };
   });
   res.json({ photos, terms });
