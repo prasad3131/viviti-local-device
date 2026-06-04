@@ -370,4 +370,98 @@ router.get('/highlights', (req, res) => {
   res.json({ highlights: result });
 });
 
+// ── Object Search ───────────────────────────────────────────────────────────
+// Searches the `objects` column (top-5 ImageNet labels per photo, written by the
+// scene pass) + `scene_tags`. No new model, no network — pure on-device lookup.
+
+// User-friendly query -> extra substrings to match in the specific ImageNet
+// labels (e.g. searching "dog" should hit "golden retriever", "labrador", ...).
+const SEARCH_SYNONYMS = {
+  dog:      ['dog', 'puppy', 'retriever', 'labrador', 'poodle', 'husky', 'bulldog', 'beagle', 'terrier', 'spaniel', 'chihuahua', 'dalmatian', 'rottweiler', 'pug', 'collie', 'corgi'],
+  cat:      ['cat', 'kitten', 'tabby', 'siamese', 'persian cat', 'egyptian cat', 'kitty'],
+  bird:     ['bird', 'parrot', 'finch', 'robin', 'jay', 'magpie', 'peacock', 'flamingo', 'duck', 'goose', 'owl', 'eagle', 'hummingbird', 'macaw'],
+  car:      ['car', 'convertible', 'sports car', 'jeep', 'limousine', 'minivan', 'cab', 'station wagon', 'race car'],
+  food:     ['pizza', 'burger', 'cheeseburger', 'hotdog', 'sandwich', 'cake', 'ice cream', 'burrito', 'bagel', 'pretzel', 'plate', 'guacamole', 'soup', 'espresso', 'meatloaf'],
+  flower:   ['flower', 'daisy', 'sunflower', 'dandelion', 'rose', 'tulip', 'orchid', 'lily'],
+  beach:    ['seashore', 'sandbar', 'beach', 'dock', 'pier', 'lakeside', 'shoal'],
+  mountain: ['alp', 'valley', 'cliff', 'volcano', 'mountain', 'promontory'],
+  baby:     ['baby', 'crib', 'cradle', 'diaper', 'bib', 'bassinet'],
+  phone:    ['cellular telephone', 'cellphone', 'phone', 'smartphone', 'ipod'],
+  laptop:   ['laptop', 'notebook', 'computer'],
+  tree:     ['tree', 'oak', 'pine', 'palm', 'maple'],
+  water:    ['lake', 'sea', 'ocean', 'river', 'fountain', 'waterfall'],
+};
+
+function expandQuery(q) {
+  const norm  = q.toLowerCase().trim();
+  const terms = new Set();
+  if (norm) terms.add(norm);
+  if (SEARCH_SYNONYMS[norm]) SEARCH_SYNONYMS[norm].forEach(t => terms.add(t));
+  for (const word of norm.split(/\s+/)) {
+    if (SEARCH_SYNONYMS[word]) SEARCH_SYNONYMS[word].forEach(t => terms.add(t));
+  }
+  return [...terms].filter(Boolean);
+}
+
+// GET /ai/search?q=dog&path=folder
+router.get('/search', (req, res) => {
+  const db = require('../db');
+  const q  = String(req.query.q || '').trim();
+  if (!q) return res.json({ photos: [], terms: [] });
+
+  const terms  = expandQuery(q);
+  const prefix = req.query.path ? String(req.query.path) + '/' : '';
+
+  const likes = [];
+  const params = [];
+  for (const t of terms) {
+    likes.push('objects LIKE ?');    params.push(`%${t}%`);
+    likes.push('scene_tags LIKE ?'); params.push(`%${t}%`);
+  }
+  params.push(prefix + '%');
+
+  let rows;
+  try {
+    rows = db.prepare(
+      `SELECT photo_path, objects FROM photo_ai
+       WHERE (${likes.join(' OR ')}) AND photo_path LIKE ?
+       ORDER BY photo_path DESC LIMIT 500`
+    ).all(...params);
+  } catch {
+    return res.json({ photos: [], terms });
+  }
+
+  const photos = rows.map(({ photo_path, objects }) => {
+    const i = photo_path.lastIndexOf('/');
+    let matched = [];
+    try { matched = JSON.parse(objects || '[]').filter(o => terms.some(t => o.includes(t))); } catch {}
+    return {
+      photo_path,
+      folder: i >= 0 ? photo_path.slice(0, i) : '',
+      name:   i >= 0 ? photo_path.slice(i + 1) : photo_path,
+      matched_objects: matched.slice(0, 3),
+    };
+  });
+  res.json({ photos, terms });
+});
+
+// GET /ai/objects — distinct object labels with counts (browse + suggestions)
+router.get('/objects', (_req, res) => {
+  const db = require('../db');
+  let rows;
+  try {
+    rows = db.prepare(`SELECT objects FROM photo_ai WHERE objects IS NOT NULL AND objects != '[]'`).all();
+  } catch {
+    return res.json({ objects: [] });
+  }
+  const counts = {};
+  for (const { objects } of rows) {
+    try { for (const o of JSON.parse(objects)) counts[o] = (counts[o] || 0) + 1; } catch {}
+  }
+  const list = Object.entries(counts)
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
+  res.json({ objects: list });
+});
+
 module.exports = { router, triggerBatch };
