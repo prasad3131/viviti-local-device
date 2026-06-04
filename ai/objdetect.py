@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Viviti Object Detection — COCO-SSD MobileNet (TFLite).
+Viviti Object Detection — EfficientDet-Lite0 (TFLite).
 
-Detects real objects (person, dog, cat, car, food, ...) with their own bundled
-label map, so search terms map to accurate labels. Fully on-device, no network
-at inference time.
+Detects real objects (person, dog, cat, car, food, ...) far more accurately than
+the old SSD MobileNet v1 (which confidently mislabelled e.g. a rose as a carrot).
+Labels are read straight from the model's embedded metadata, so class indices
+can't mismatch. Fully on-device, no network at inference.
 
 Usage:
-  python3 objdetect.py --download                 download model + labels
+  python3 objdetect.py --download                 download model
   python3 objdetect.py <image_path>               print detected labels (JSON)
   python3 objdetect.py --batch <photo_dir> <db>   detect across library, update DB
 
@@ -17,35 +18,38 @@ import sys, os, json, zipfile, urllib.request
 from pathlib import Path
 
 MODELS_DIR  = Path(__file__).parent / 'models'
-MODEL_ZIP_URL = 'https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip'
-MODEL_FILE  = 'coco_ssd_mobilenet_v1.tflite'
-LABELS_FILE = 'coco_ssd_labels.txt'
+# EfficientDet-Lite0, int8, with embedded label metadata (~4.5 MB).
+MODEL_URL   = 'https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/android/lite-model_efficientdet_lite0_detection_metadata_1.tflite'
+MODEL_FILE  = 'efficientdet_lite0.tflite'
 
 SCORE_THRESHOLD = 0.40   # min detection confidence to keep
 MAX_LABELS      = 8      # distinct labels stored per photo
 IMAGE_EXT       = {'.jpg', '.jpeg', '.png', '.heic', '.cr2', '.arw', '.nef', '.dng'}
 
+# Fallback only — used if the model has no embedded labelmap (it should).
+COCO80 = ['person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed','dining table','toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush']
+
 
 def ensure_assets():
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path  = MODELS_DIR / MODEL_FILE
-    labels_path = MODELS_DIR / LABELS_FILE
-    if model_path.exists() and labels_path.exists():
-        return str(model_path), str(labels_path)
+    model_path = MODELS_DIR / MODEL_FILE
+    if not model_path.exists():
+        print('[objdetect] Downloading EfficientDet-Lite0 (~4.5 MB)...', file=sys.stderr)
+        urllib.request.urlretrieve(MODEL_URL, str(model_path))
+    return str(model_path)
 
-    print('[objdetect] Downloading COCO-SSD MobileNet (~6.9 MB)...', file=sys.stderr)
-    zip_path = MODELS_DIR / 'objdetect.zip'
-    urllib.request.urlretrieve(MODEL_ZIP_URL, str(zip_path))
-    with zipfile.ZipFile(str(zip_path)) as z:
-        for member in z.namelist():
-            if member.endswith('.tflite'):
-                with z.open(member) as src, open(model_path, 'wb') as dst:
-                    dst.write(src.read())
-            elif 'labelmap' in member or member.endswith('labels.txt'):
-                with z.open(member) as src, open(labels_path, 'wb') as dst:
-                    dst.write(src.read())
-    zip_path.unlink()
-    return str(model_path), str(labels_path)
+
+def _extract_labels(model_path):
+    """TFLite metadata models append their associated files (labelmap) as a zip
+    archive to the .tflite. Read it directly — no separate file, no guessing."""
+    try:
+        with zipfile.ZipFile(model_path) as z:
+            for n in z.namelist():
+                if 'label' in n.lower() or n.endswith('.txt'):
+                    return [l.strip() for l in z.read(n).decode('utf-8').splitlines() if l.strip()]
+    except Exception:
+        pass
+    return None
 
 
 class ObjectDetector:
@@ -53,17 +57,18 @@ class ObjectDetector:
     def __init__(self):
         self._interp = None
         self._labels = None
+        self._label_offset = 0
         self._in_idx = None
-        self._in_size = 300
+        self._in_size = 320
         self._in_dtype = None
-        self._out = None   # dict: boxes/classes/scores/count tensor indices
+        self._out = None
 
     def _load(self):
         try:
             import ai_edge_litert.interpreter as tflite
         except ImportError:
             import tflite_runtime.interpreter as tflite
-        model_path, labels_path = ensure_assets()
+        model_path = ensure_assets()
         self._interp = tflite.Interpreter(model_path=model_path)
         self._interp.allocate_tensors()
 
@@ -72,17 +77,10 @@ class ObjectDetector:
         self._in_size  = int(inp['shape'][1])
         self._in_dtype = inp['dtype']
 
-        with open(labels_path) as f:
-            self._labels = [l.strip() for l in f if l.strip()]
-        # This labelmap prepends a '???' placeholder, so the model's 0-based class
-        # indices map to labels[idx + 1] (class 0 = "person"). Detect that and
-        # offset; fall back to 0 for labelmaps without the placeholder.
+        self._labels = _extract_labels(model_path) or COCO80
+        # Some labelmaps prepend a '???'/'background' placeholder, shifting indices.
         self._label_offset = 1 if self._labels and self._labels[0] in ('???', 'background', '') else 0
 
-        # Map the 4 SSD-postprocess outputs by shape (order varies by export):
-        #   boxes  -> ndim 3, last dim 4
-        #   count  -> total size 1
-        #   classes/scores -> [1, N]  (disambiguated after first inference)
         outs = self._interp.get_output_details()
         boxes_i = count_i = None
         flat = []
@@ -106,13 +104,16 @@ class ObjectDetector:
         if img is None:
             return []
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        inp = cv2.resize(rgb, (self._in_size, self._in_size)).astype(self._in_dtype)
+        inp = cv2.resize(rgb, (self._in_size, self._in_size))
+        if np.issubdtype(self._in_dtype, np.floating):
+            inp = inp.astype(self._in_dtype) / 255.0    # float models expect [0,1]
+        else:
+            inp = inp.astype(self._in_dtype)             # quantized uint8 [0,255]
         self._interp.set_tensor(self._in_idx, inp[np.newaxis])
         self._interp.invoke()
 
         get = lambda i: self._interp.get_tensor(i)[0]
         a, b = get(self._out['flat'][0]), get(self._out['flat'][1])
-        # Scores are confidences in [0,1]; classes are integer indices. Decide once.
         if self._out['classes'] is None:
             a_is_scores = float(np.max(a)) <= 1.0 and not _all_int(a)
             b_is_scores = float(np.max(b)) <= 1.0 and not _all_int(b)
@@ -121,7 +122,6 @@ class ObjectDetector:
             elif b_is_scores and not a_is_scores:
                 self._out['scores'], self._out['classes'] = self._out['flat'][1], self._out['flat'][0]
             else:
-                # Fall back to documented order: classes first, scores second
                 self._out['classes'], self._out['scores'] = self._out['flat'][0], self._out['flat'][1]
 
         classes = get(self._out['classes'])
@@ -137,7 +137,6 @@ class ObjectDetector:
                 if label in ('???', '', 'background'):
                     continue
                 found[label] = max(found.get(label, 0.0), float(sc))
-        # Highest-confidence labels first
         return [lbl for lbl, _ in sorted(found.items(), key=lambda kv: -kv[1])][:MAX_LABELS]
 
 
@@ -166,7 +165,6 @@ def run_batch(photo_dir, db_path):
     import sqlite3
     det = ObjectDetector()
     conn = sqlite3.connect(db_path)
-    # objects column already exists (created by batch.py); ensure table is there
     conn.execute('''CREATE TABLE IF NOT EXISTS photo_ai (
         photo_path TEXT PRIMARY KEY, objects TEXT )''')
 
@@ -192,8 +190,7 @@ def run_batch(photo_dir, db_path):
                 conn.commit()
     conn.commit()
 
-    # Prune orphan rows whose photo files were deleted — otherwise stale labels
-    # linger and search can return dead (blank) results.
+    # Prune orphan rows whose photo files were deleted.
     removed = 0
     for (pp,) in conn.execute('SELECT photo_path FROM photo_ai').fetchall():
         ap = os.path.join(photo_dir, pp.replace('/', os.sep))
