@@ -23,7 +23,10 @@ except ImportError:
     HAS_SCENE = False
 
 IMAGE_EXT      = {'.jpg', '.jpeg', '.png', '.heic', '.cr2', '.arw', '.nef', '.dng'}
-BLUR_THRESHOLD = 100
+# Laplacian-variance cutoff. 100 over-flagged phone JPEGs with bokeh/low-light
+# backgrounds (real libraries cluster ≤24 for truly blurry, then jump to ~49+ for
+# sharp-subject shots). 40 sits in that gap — filters genuine blur, keeps good photos.
+BLUR_THRESHOLD = 40
 DUPE_THRESHOLD = 8
 
 
