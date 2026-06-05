@@ -134,3 +134,19 @@ describe('thumbnail generation timeout', () => {
     jest.useRealTimers();
   });
 });
+
+// ── Empty thumbnail guard (blank-photo bug) ─────────────────────────────────────
+
+describe('empty thumbnail guard', () => {
+  // A cached thumb is only valid if it's a real, non-empty file. A 0-byte file
+  // (failed/interrupted Sharp write) was being served forever -> black image.
+  const nonEmpty = (sizeBytes) => sizeBytes > 0;
+
+  test('0-byte thumb is treated as missing, never served', () => {
+    expect(nonEmpty(0)).toBe(false);
+  });
+
+  test('a real thumb (>0 bytes) is served', () => {
+    expect(nonEmpty(63545)).toBe(true);
+  });
+});

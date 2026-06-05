@@ -127,8 +127,11 @@ router.get('/thumb', async (req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=604800');
     res.sendFile(f);
   };
+  // A cached thumb counts only if it's a real, non-empty file. A 0-byte file
+  // (failed/interrupted generation) must never be served — that's a black image.
+  const nonEmpty = (f) => { try { return fs.statSync(f).size > 0; } catch { return false; } };
 
-  if (fs.existsSync(thumbPath)) return serve(thumbPath);
+  if (nonEmpty(thumbPath)) return serve(thumbPath);
 
   fs.mkdirSync(THUMB_DIR, { recursive: true });
 
@@ -138,6 +141,9 @@ router.get('/thumb', async (req, res) => {
       // Grid thumbnails (≤400px): square crop centred on subject
       // Viewer thumbnails (>400px): letterbox — preserve full image, no crop
       const isViewer = size > 400;
+      // Write to a temp file then rename — an atomic swap so a partial/failed
+      // write can never leave a servable 0-byte file at thumbPath.
+      const tmp = `${thumbPath}.${process.pid}.tmp`;
       const p = runSharp(() =>
         sharp(fp)
           .rotate()
@@ -145,8 +151,9 @@ router.get('/thumb', async (req, res) => {
             ? { fit: 'inside', withoutEnlargement: true }
             : { fit: 'cover', position: 'attention' })
           .jpeg({ quality: isViewer ? 88 : 82, progressive: true })
-          .toFile(thumbPath)
-          .catch(() => null)
+          .toFile(tmp)
+          .then(() => { fs.renameSync(tmp, thumbPath); })
+          .catch(() => { try { fs.unlinkSync(tmp); } catch {} })
       ).finally(() => pendingThumbs.delete(thumbPath));
       pendingThumbs.set(thumbPath, p);
     }
@@ -166,7 +173,10 @@ router.get('/thumb', async (req, res) => {
     });
   }
 
-  if (fs.existsSync(thumbPath)) return serve(thumbPath);
+  if (nonEmpty(thumbPath)) return serve(thumbPath);
+  // Generation failed or produced nothing usable — drop any empty artifact so the
+  // next request retries, and serve the original (renders fine on the client).
+  try { if (fs.existsSync(thumbPath) && !nonEmpty(thumbPath)) fs.unlinkSync(thumbPath); } catch {}
   serve(fp);
 });
 
