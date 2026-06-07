@@ -216,9 +216,16 @@ const upload = multer({
   }),
 });
 
-router.post('/upload', upload.array('photos', 50), (req, res) => {
-  if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
-  res.json({ uploaded: req.files.map(f => ({ name: f.filename, size: f.size })) });
+router.post('/upload', (req, res) => {
+  upload.array('photos', 50)(req, res, (err) => {
+    const cleanup = () => (req.files || []).forEach(f => { try { fs.unlinkSync(f.path); } catch {} });
+    // Drop partial files: an aborted/interrupted upload (e.g. dropped connection)
+    // would otherwise leave a truncated file that plays only partway.
+    if (err) { cleanup(); return res.status(400).json({ error: 'Upload failed' }); }
+    if (!req.complete) { cleanup(); return res.status(400).json({ error: 'Upload interrupted — please retry' }); }
+    if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
+    res.json({ uploaded: req.files.map(f => ({ name: f.filename, size: f.size })) });
+  });
 });
 
 router.post('/move', (req, res) => {
