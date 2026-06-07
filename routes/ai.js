@@ -9,6 +9,7 @@ const CRITIQUE_SCRIPT      = path.join(__dirname, '..', 'ai', 'critique.py');
 const BATCH_SCRIPT         = path.join(__dirname, '..', 'ai', 'batch.py');
 const FACES_SCRIPT         = path.join(__dirname, '..', 'ai', 'faces.py');
 const DETECT_PHOTO_SCRIPT  = path.join(__dirname, '..', 'ai', 'detect_photo.py');
+const DETECT_VIDEO_SCRIPT  = path.join(__dirname, '..', 'ai', 'detect_video.py');
 const OBJDETECT_SCRIPT     = path.join(__dirname, '..', 'ai', 'objdetect.py');
 const DB_PATH         = path.join(config.dataDir, 'viviti.db');
 const FACE_THUMB_DIR  = path.join(config.dataDir, 'face_thumbs');
@@ -201,6 +202,20 @@ router.post('/faces/detect-photo', async (req, res) => {
   // Photo not yet scanned — run fresh detection and store results
   try {
     const result = await runPython(DETECT_PHOTO_SCRIPT, [fp, DB_PATH, config.photoDir], 30_000);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /ai/faces/detect-video { path, name } — sample frames + detect people
+router.post('/faces/detect-video', async (req, res) => {
+  const fp = safePath(req.body.path, req.body.name);
+  if (!fp) return res.status(400).json({ error: 'Invalid path' });
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Video not found' });
+  try {
+    // Sampling many frames is slow on ARM — allow up to 3 min.
+    const result = await runPython(DETECT_VIDEO_SCRIPT, [fp, DB_PATH, config.photoDir], 180_000);
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });

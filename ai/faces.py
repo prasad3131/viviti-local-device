@@ -149,8 +149,11 @@ def _yunet_valid_structure(face_row):
 
 # ── Main detection ─────────────────────────────────────────────────────────────
 
-def detect_faces_in(img_path, thumb_dir):
-    img = cv2.imread(img_path)
+def detect_faces_in(img_path, thumb_dir, img=None):
+    # img_path is also used as the thumb-key seed; pass a pre-loaded frame (img)
+    # to detect on a video frame without re-reading from disk.
+    if img is None:
+        img = cv2.imread(img_path)
     if img is None:
         return []
     ih, iw = img.shape[:2]
