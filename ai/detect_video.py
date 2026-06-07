@@ -53,13 +53,20 @@ def run_detect_video(video_path, db_path, photo_dir):
                     conn.execute('UPDATE face_clusters SET sample_thumb=? WHERE id=?',
                                  (face['thumb_path'], cid))
                 prev = people.get(cid)
-                if prev is None or face['score'] > prev['score']:
+                if prev is None:
                     people[cid] = {
                         'cluster_id': cid,
                         'cluster_name': cname,
                         'thumb_filename': os.path.basename(face['thumb_path']),
                         'score': face['score'],
+                        'frames': 1,           # how many sampled frames this person is in
                     }
+                else:
+                    prev['frames'] += 1        # used-set => one increment per frame
+                    if face['score'] > prev['score']:
+                        prev['score'] = face['score']
+                        prev['thumb_filename'] = os.path.basename(face['thumb_path'])
+                        prev['cluster_name'] = cname
             sampled += 1
         frame_idx += 1
         if total and frame_idx >= total:
@@ -69,8 +76,16 @@ def run_detect_video(video_path, db_path, photo_dir):
     conn.commit()
     conn.close()
 
-    result = [{'cluster_id': p['cluster_id'], 'cluster_name': p['cluster_name'],
-               'thumb_filename': p['thumb_filename']} for p in people.values()]
+    # Keep real people, drop one-off false positives: a genuine subject appears in
+    # many sampled frames. Named (matched to a known person) is high-confidence, so
+    # a lower bar; unnamed needs to recur.
+    min_unnamed = max(3, round(sampled * 0.15))
+    result = []
+    for p in people.values():
+        keep = (p['cluster_name'] and p['frames'] >= 2) or (not p['cluster_name'] and p['frames'] >= min_unnamed)
+        if keep:
+            result.append({'cluster_id': p['cluster_id'], 'cluster_name': p['cluster_name'],
+                           'thumb_filename': p['thumb_filename']})
     print(json.dumps({'faces': result, 'frames_sampled': sampled}))
 
 
