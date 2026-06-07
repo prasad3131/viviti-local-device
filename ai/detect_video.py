@@ -11,8 +11,8 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent))
 from faces import detect_faces_in, assign_cluster, init_db
 
-SAMPLE_EVERY_SEC = 1.0   # aim ~1 sample per second
-MAX_FRAMES       = 25    # hard cap on decodes — keeps runtime bounded on ARM
+SAMPLE_EVERY_SEC = 1.0   # aim ~1 sample per second (fallback when frame count unknown)
+MAX_FRAMES       = 18    # hard cap on detections — keeps runtime well under timeout
 
 
 def run_detect_video(video_path, db_path, photo_dir):
@@ -28,24 +28,29 @@ def run_detect_video(video_path, db_path, photo_dir):
 
     fps   = cap.get(cv2.CAP_PROP_FPS) or 30
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    duration = (total / fps) if fps else 0     # seconds
 
-    # Seek to evenly-spaced timestamps (NOT sequential read) so the work is capped
-    # at ~MAX_FRAMES decodes regardless of fps — vital for high-fps slow-mo clips.
-    if duration > 0:
-        n = min(MAX_FRAMES, max(1, int(duration / SAMPLE_EVERY_SEC)))
-        times_ms = [duration * (i + 0.5) / n * 1000 for i in range(n)]
+    # grab() cheaply skips frames without decoding; retrieve() decodes only the
+    # ones we sample. Far faster than POS_MSEC seeking (which decodes from a
+    # keyframe each time) and bounds work on high-fps slow-mo clips. Space
+    # MAX_FRAMES samples across the whole video.
+    if total > 0:
+        step = max(1, int(total / MAX_FRAMES))
     else:
-        times_ms = [i * SAMPLE_EVERY_SEC * 1000 for i in range(MAX_FRAMES)]
+        step = max(1, int(round(fps * SAMPLE_EVERY_SEC)))
 
     people = {}            # cluster_id -> best { ..., score }
     sampled = 0
+    read = 0
 
-    for t_ms in times_ms:
-        cap.set(cv2.CAP_PROP_POS_MSEC, t_ms)
-        ok, frame = cap.read()
+    while sampled < MAX_FRAMES:
+        if not cap.grab():
+            break
+        read += 1
+        if read % step != 0:
+            continue
+        ok, frame = cap.retrieve()
         if ok and frame is not None:
-            seed = f'{video_path}#{int(t_ms)}'
+            seed = f'{video_path}#{read}'
             faces = detect_faces_in(seed, thumb_dir, img=frame, lenient=True)
             used = set()                      # one cluster per face within a frame
             for face in faces:
