@@ -40,7 +40,7 @@ def run_detect_video(video_path, db_path, photo_dir):
             break
         if frame_idx % step == 0:
             seed = f'{video_path}#{frame_idx}'
-            faces = detect_faces_in(seed, thumb_dir, img=frame)
+            faces = detect_faces_in(seed, thumb_dir, img=frame, lenient=True)
             used = set()                      # one cluster per face within a frame
             for face in faces:
                 cid = assign_cluster(conn, face['embedding'], exclude=used)

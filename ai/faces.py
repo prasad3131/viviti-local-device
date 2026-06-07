@@ -149,7 +149,7 @@ def _yunet_valid_structure(face_row):
 
 # ── Main detection ─────────────────────────────────────────────────────────────
 
-def detect_faces_in(img_path, thumb_dir, img=None):
+def detect_faces_in(img_path, thumb_dir, img=None, lenient=False):
     # img_path is also used as the thumb-key seed; pass a pre-loaded frame (img)
     # to detect on a video frame without re-reading from disk.
     if img is None:
@@ -157,6 +157,14 @@ def detect_faces_in(img_path, thumb_dir, img=None):
     if img is None:
         return []
     ih, iw = img.shape[:2]
+
+    # Lenient mode (video): faces are usually smaller/further & harder, so allow
+    # smaller faces and lower the detector confidence to catch them.
+    min_px   = 30     if lenient else MIN_FACE_PX
+    min_area = 0.0008 if lenient else MIN_FACE_AREA_RATIO
+    skin_min = 0.10   if lenient else 0.18
+    try: DETECTOR.setScoreThreshold(0.30 if lenient else SCORE_THRESHOLD)
+    except Exception: pass
 
     scale = min(1.0, MAX_DIM / max(ih, iw))
     work  = cv2.resize(img, (int(iw*scale), int(ih*scale))) if scale < 1.0 else img
@@ -180,14 +188,14 @@ def detect_faces_in(img_path, thumb_dir, img=None):
         x2  = min(iw, x1+fw);         y2 = min(ih, y1+fh)
         fw, fh = x2-x1, y2-y1
 
-        if fw < MIN_FACE_PX or fh < MIN_FACE_PX: continue
+        if fw < min_px or fh < min_px:           continue
         if fh > 0 and fw/fh > MAX_FACE_AR:        continue
-        if (fw * fh) / (iw * ih) < MIN_FACE_AREA_RATIO: continue  # skip tiny background faces
+        if (fw * fh) / (iw * ih) < min_area:     continue  # skip tiny background faces
 
         crop = img[y1:y2, x1:x2]
-        if crop.size == 0:             continue
-        if not has_skin_tone(crop):    continue
-        if not has_face_texture(crop): continue
+        if crop.size == 0:                        continue
+        if not has_skin_tone(crop, min_ratio=skin_min): continue
+        if not has_face_texture(crop):            continue
 
         # ── Embedding ────────────────────────────────────────────────────────
         if USE_SFACE:
