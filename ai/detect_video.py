@@ -11,8 +11,11 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent))
 from faces import detect_faces_in, assign_cluster, init_db
 
-SAMPLE_EVERY_SEC = 1.0   # aim ~1 sample per second (fallback when frame count unknown)
-MAX_FRAMES       = 18    # hard cap on detections — keeps runtime well under timeout
+MAX_FRAMES = 14    # detections to run (each ~1.5s on ARM)
+# Hard cap on frames touched: on some codecs grab() fully decodes, and the Pi
+# decodes 1080p at only ~3 fps, so touching the whole video is too slow. Bound
+# the work — we sample the earlier part of the clip densely.
+MAX_GRABS  = 150
 
 
 def run_detect_video(video_path, db_path, photo_dir):
@@ -26,23 +29,15 @@ def run_detect_video(video_path, db_path, photo_dir):
         print(json.dumps({'faces': [], 'error': 'cannot open video'}))
         return
 
-    fps   = cap.get(cv2.CAP_PROP_FPS) or 30
-    total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-
-    # grab() cheaply skips frames without decoding; retrieve() decodes only the
-    # ones we sample. Far faster than POS_MSEC seeking (which decodes from a
-    # keyframe each time) and bounds work on high-fps slow-mo clips. Space
-    # MAX_FRAMES samples across the whole video.
-    if total > 0:
-        step = max(1, int(total / MAX_FRAMES))
-    else:
-        step = max(1, int(round(fps * SAMPLE_EVERY_SEC)))
+    # Sample every `step` frames, but never touch more than MAX_GRABS frames
+    # (decoding is the bottleneck). retrieve() only decodes the sampled ones.
+    step = max(1, MAX_GRABS // MAX_FRAMES)
 
     people = {}            # cluster_id -> best { ..., score }
     sampled = 0
     read = 0
 
-    while sampled < MAX_FRAMES:
+    while sampled < MAX_FRAMES and read < MAX_GRABS:
         if not cap.grab():
             break
         read += 1
