@@ -39,7 +39,14 @@ def make_thumb(video_path, out_path, size):
         x = (rw - size) // 2
         y = (rh - size) // 2
         crop = resized[y:y + size, x:x + size]
-        return bool(cv2.imwrite(out_path, crop, [cv2.IMWRITE_JPEG_QUALITY, 82]))
+        # imencode (not imwrite): the route writes to a *.tmp path and cv2.imwrite
+        # picks the format from the extension, so it fails on non-image extensions.
+        ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if not ok:
+            return False
+        with open(out_path, 'wb') as f:
+            f.write(buf.tobytes())
+        return True
     except Exception:
         return False
 
