@@ -11,8 +11,8 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent))
 from faces import detect_faces_in, assign_cluster, init_db
 
-SAMPLE_EVERY_SEC = 1.0   # process ~1 frame per second
-MAX_FRAMES       = 40    # cap work on long videos
+SAMPLE_EVERY_SEC = 1.0   # aim ~1 sample per second
+MAX_FRAMES       = 25    # hard cap on decodes — keeps runtime bounded on ARM
 
 
 def run_detect_video(video_path, db_path, photo_dir):
@@ -28,18 +28,24 @@ def run_detect_video(video_path, db_path, photo_dir):
 
     fps   = cap.get(cv2.CAP_PROP_FPS) or 30
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    step  = max(1, int(round(fps * SAMPLE_EVERY_SEC)))
+    duration = (total / fps) if fps else 0     # seconds
+
+    # Seek to evenly-spaced timestamps (NOT sequential read) so the work is capped
+    # at ~MAX_FRAMES decodes regardless of fps — vital for high-fps slow-mo clips.
+    if duration > 0:
+        n = min(MAX_FRAMES, max(1, int(duration / SAMPLE_EVERY_SEC)))
+        times_ms = [duration * (i + 0.5) / n * 1000 for i in range(n)]
+    else:
+        times_ms = [i * SAMPLE_EVERY_SEC * 1000 for i in range(MAX_FRAMES)]
 
     people = {}            # cluster_id -> best { ..., score }
-    frame_idx = 0
     sampled = 0
 
-    while sampled < MAX_FRAMES:
+    for t_ms in times_ms:
+        cap.set(cv2.CAP_PROP_POS_MSEC, t_ms)
         ok, frame = cap.read()
-        if not ok:
-            break
-        if frame_idx % step == 0:
-            seed = f'{video_path}#{frame_idx}'
+        if ok and frame is not None:
+            seed = f'{video_path}#{int(t_ms)}'
             faces = detect_faces_in(seed, thumb_dir, img=frame, lenient=True)
             used = set()                      # one cluster per face within a frame
             for face in faces:
@@ -68,9 +74,6 @@ def run_detect_video(video_path, db_path, photo_dir):
                         prev['thumb_filename'] = os.path.basename(face['thumb_path'])
                         prev['cluster_name'] = cname
             sampled += 1
-        frame_idx += 1
-        if total and frame_idx >= total:
-            break
 
     cap.release()
     conn.commit()
