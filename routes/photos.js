@@ -118,8 +118,7 @@ router.get('/thumb', async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
 
-  if (VIDEO_RE.test(name)) return res.status(415).json({ error: 'No thumb for video' });
-
+  const isVideoFile = VIDEO_RE.test(name);
   const key       = path.relative(config.photoDir, fp).replace(/[/\\]/g, '_');
   const thumbPath = path.join(THUMB_DIR, `${key}_${size}${v}.jpg`);
 
@@ -135,7 +134,20 @@ router.get('/thumb', async (req, res) => {
 
   fs.mkdirSync(THUMB_DIR, { recursive: true });
 
-  if (sharp) {
+  if (isVideoFile) {
+    // Extract a poster frame via OpenCV (atomic temp + rename).
+    const tmp = `${thumbPath}.${process.pid}.tmp`;
+    await new Promise(resolve => {
+      const py = spawn(PYTHON, [
+        path.join(__dirname, '..', 'ai', 'video_thumb.py'), fp, tmp, String(size),
+      ]);
+      py.on('close', code => {
+        if (code === 0) { try { fs.renameSync(tmp, thumbPath); } catch {} }
+        else { try { fs.unlinkSync(tmp); } catch {} }
+        resolve();
+      });
+    });
+  } else if (sharp) {
     // Sharp via concurrency-limited queue — max 4 simultaneous ops on weak ARM CPU
     if (!pendingThumbs.has(thumbPath)) {
       // Grid thumbnails (≤400px): square crop centred on subject
@@ -175,9 +187,12 @@ router.get('/thumb', async (req, res) => {
 
   if (nonEmpty(thumbPath)) return serve(thumbPath);
   // Generation failed or produced nothing usable — drop any empty artifact so the
-  // next request retries, and serve the original (renders fine on the client).
+  // next request retries.
   try { if (fs.existsSync(thumbPath) && !nonEmpty(thumbPath)) fs.unlinkSync(thumbPath); } catch {}
-  serve(fp);
+  // For a video, never fall back to the raw file (the client can't render it as
+  // an image) — 404 so the app shows its ▶ placeholder instead.
+  if (isVideoFile) return res.status(404).json({ error: 'No poster' });
+  serve(fp);  // image: original renders fine on the client
 });
 
 router.get('/file', (req, res) => {
