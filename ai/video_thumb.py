@@ -12,32 +12,36 @@ def make_thumb(video_path, out_path, size):
     if not cap.isOpened():
         return False
 
-    fps   = cap.get(cv2.CAP_PROP_FPS) or 30
-    total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    # Seek ~1s in (or 10% through) to skip black intro frames.
-    target = 0
-    if total > 0:
-        target = min(int(fps * 1), int(total * 0.1))
-    if target > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target)
-
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        ok, frame = cap.read()
+    # Time-based seek (POS_MSEC) is far more reliable across codecs than frame
+    # index. Try ~1s in (skip black intros), fall back to the very start.
+    frame = None
+    for ms in (1000, 0):
+        cap.set(cv2.CAP_PROP_POS_MSEC, ms)
+        ok, f = cap.read()
+        if ok and f is not None:
+            frame = f
+            break
+    if frame is None:
+        ok, f = cap.read()          # last resort: sequential first frame
+        if ok and f is not None:
+            frame = f
     cap.release()
-    if not ok or frame is None:
+    if frame is None:
         return False
 
-    h, w = frame.shape[:2]
-    scale = size / min(h, w)
-    rw, rh = max(size, int(w * scale)), max(size, int(h * scale))
-    resized = cv2.resize(frame, (rw, rh))
-    x = (rw - size) // 2
-    y = (rh - size) // 2
-    crop = resized[y:y + size, x:x + size]
-    cv2.imwrite(out_path, crop, [cv2.IMWRITE_JPEG_QUALITY, 82])
-    return True
+    try:
+        h, w = frame.shape[:2]
+        if h == 0 or w == 0:
+            return False
+        scale = size / min(h, w)
+        rw, rh = max(size, int(w * scale)), max(size, int(h * scale))
+        resized = cv2.resize(frame, (rw, rh))
+        x = (rw - size) // 2
+        y = (rh - size) // 2
+        crop = resized[y:y + size, x:x + size]
+        return bool(cv2.imwrite(out_path, crop, [cv2.IMWRITE_JPEG_QUALITY, 82]))
+    except Exception:
+        return False
 
 
 if __name__ == '__main__':

@@ -82,10 +82,10 @@ def run_detect_video(video_path, db_path, photo_dir):
     # Keep real people, drop one-off false positives: a genuine subject appears in
     # many sampled frames. Named (matched to a known person) is high-confidence, so
     # a lower bar; unnamed needs to recur.
-    min_unnamed = max(3, round(sampled * 0.15))
+    min_unnamed = max(2, round(sampled * 0.10))
     result = []
     for p in people.values():
-        keep = (p['cluster_name'] and p['frames'] >= 2) or (not p['cluster_name'] and p['frames'] >= min_unnamed)
+        keep = (p['cluster_name'] and p['frames'] >= 1) or (not p['cluster_name'] and p['frames'] >= min_unnamed)
         if keep:
             result.append({'cluster_id': p['cluster_id'], 'cluster_name': p['cluster_name'],
                            'thumb_filename': p['thumb_filename']})
